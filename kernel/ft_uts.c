@@ -46,8 +46,8 @@ struct sync_uts_work {
 static struct workqueue_struct *ft_uts_wq;
 
 /*
- * Whenever someone changes the uts on a hot replica, this should be called to update
- * all the uts in other cold replicas
+ * Whenever someone changes the uts on a primary replica, this should be called to update
+ * all the uts in other secondary replicas
  */
 int sync_uts(struct task_struct *task)
 {
@@ -65,9 +65,9 @@ int sync_uts(struct task_struct *task)
 
 	ancestor = find_task_by_vpid(task->tgid);
 
-	if (ancestor->replica_type == HOT_REPLICA ||
-			ancestor->replica_type == NEW_HOT_REPLICA_DESCENDANT) {
-		// Sync the cold replicas from the hot one
+	if (ancestor->replica_type == PRIMARY_REPLICA ||
+			ancestor->replica_type == NEW_PRIMARY_REPLICA_DESCENDANT) {
+		// Sync the secondary replicas from the primary one
 		level = task->ft_pid.level;
 		msg_size = sizeof(struct uts_msg) + level * sizeof(int);
 		msg = kmalloc(msg_size, GFP_KERNEL);
@@ -76,15 +76,15 @@ int sync_uts(struct task_struct *task)
 
 		msg->header.type = PCN_KMSG_TYPE_FT_UTS_SYNC;
 		msg->header.prio = PCN_KMSG_PRIO_NORMAL;
-		msg->uts_id = task->next_id_kernel_requests ++;
+		msg->uts_id = task->id_syscall;
 		memcpy(&msg->ft_pop_id, &task->ft_pid.ft_pop_id, sizeof(struct ft_pop_rep_id));
 		msg->level = task->ft_pid.level;
 		memcpy(&msg->info.utsname, &task->nsproxy->uts_ns->ft_name, sizeof(struct new_utsname));
-		send_to_all_cold_replicas(task->ft_popcorn, (struct pcn_kmsg_long_message*) msg, msg_size);
+		send_to_all_secondary_replicas(task->ft_popcorn, (struct pcn_kmsg_long_message*) msg, msg_size);
 		FTPRINTK("FT UTS sync out on %d\n", task->ft_pid);
-	} else if (ancestor->replica_type == COLD_REPLICA ||
-			ancestor->replica_type == NEW_COLD_REPLICA_DESCENDANT) {
-		// Cold one? Halt it.
+	} else if (ancestor->replica_type == SECONDARY_REPLICA ||
+			ancestor->replica_type == NEW_SECONDARY_REPLICA_DESCENDANT) {
+		// Secondary one? Halt it.
 	}
 }
 
