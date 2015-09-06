@@ -283,6 +283,9 @@ SYSCALL_DEFINE2(setns, int, fd, int, nstype)
 		goto out;
 	}
 	switch_task_namespaces(tsk, new_nsproxy);
+
+	// Sync the other side with the initial state
+	sync_uts(tsk);
 out:
 	fput(file);
 	return err;
