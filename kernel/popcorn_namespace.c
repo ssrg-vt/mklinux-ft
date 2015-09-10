@@ -49,6 +49,8 @@ static struct popcorn_namespace *create_popcorn_namespace(struct popcorn_namespa
 		goto out;
 
 	kref_init(&ns->kref);
+	init_pid_list(ns);
+	add_pid_to_ns(ns, current->pid);
 
         return ns;
 
