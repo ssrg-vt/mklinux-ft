@@ -74,6 +74,7 @@
 #include <linux/process_server.h>
 #include <linux/sched.h>
 #include <linux/ft_replication.h>
+#include <linux/popcorn_namespace.h>
 
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
@@ -1267,6 +1268,12 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 	}
 
 	p->pid = pid_nr(pid);
+#ifdef FT_POPCORN
+	if (is_popcorn(p)) {
+		add_pid_to_ns(p->nsproxy->pop_ns, p->pid);
+		set_token(p->nsproxy->pop_ns, p->pid);
+	}
+#endif
 	p->tgid = p->pid;
 	if (clone_flags & CLONE_THREAD)
 		p->tgid = current->tgid;

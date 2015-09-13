@@ -26,6 +26,7 @@
 #include <linux/file.h>
 #include <linux/syscalls.h>
 #include <linux/popcorn_namespace.h>
+#include <linux/ft_uts.h>
 
 static struct kmem_cache *nsproxy_cachep;
 

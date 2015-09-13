@@ -76,6 +76,7 @@
 #ifdef SUPPORT_FOR_CLUSTERING
 #include <linux/popcorn.h>
 #endif
+#include <linux/popcorn_namespace.h>
 
 #include <asm/tlb.h>
 #include <asm/irq_regs.h>
@@ -4411,6 +4412,7 @@ static void __sched __schedule(void)
 	unsigned long *switch_count;
 	struct rq *rq;
 	int cpu;
+	struct pid_list *token;
 
 need_resched:
 	preempt_disable();
@@ -4418,6 +4420,16 @@ need_resched:
 	rq = cpu_rq(cpu);
 	rcu_note_context_switch(cpu);
 	prev = rq->curr;
+
+	/*
+	 *if (is_popcorn(prev)) {
+	 *    printk("now %d, token %d\n", prev->pid, prev->nsproxy->pop_ns->token->pid);
+	 *    if ((uint64_t )(prev->nsproxy->pop_ns->token->pid) == (uint64_t )(prev->pid)) {
+	 *        pass_token(prev->nsproxy->pop_ns);
+	 *        printk("pass on to %d\n", prev->pid);
+	 *    }
+	 *}
+	 */
 
 	schedule_debug(prev);
 
@@ -4480,6 +4492,17 @@ need_resched:
 	post_schedule(rq);
 
 	preempt_enable_no_resched();
+
+	if (is_popcorn(rq->curr)) {
+		if ((uint64_t )(rq->curr->nsproxy->pop_ns->token->pid) != (uint64_t )(rq->curr->pid)) {
+			printk("reschedule ? %d - %d\n", rq->curr->nsproxy->pop_ns->token->pid, rq->curr->pid);
+			//goto need_resched;
+		} else {
+			printk("pass token ? %d - %d\n", rq->curr->nsproxy->pop_ns->token->pid, rq->curr->pid);
+			pass_token(prev->nsproxy->pop_ns);
+		}
+	}
+
 	if (need_resched())
 		goto need_resched;
 }
