@@ -21,9 +21,9 @@ void put_pop_ns(struct popcorn_namespace *ns);
 int associate_to_popcorn_ns(struct task_struct * tsk, int replication_degree);
 int is_popcorn_namespace_active(struct popcorn_namespace* ns);
 
-struct pid_list {
-	struct list_head pid_list_member;
-	pid_t pid;
+struct task_list {
+	struct list_head task_list_member;
+	struct task_struct *task;
 };
 
 struct popcorn_namespace
@@ -34,24 +34,24 @@ struct popcorn_namespace
 	int replication_degree;
 
 	// This one stores all the pids under this namespace, ordered by their creation time
-	struct pid_list ns_pid_list;
-	spinlock_t pid_list_lock;
-	struct pid_list *token;
+	struct task_list ns_task_list;
+	spinlock_t task_list_lock;
+	struct task_list *token;
 };
 
 extern struct popcorn_namespace init_pop_ns;
 
-static inline void dump_pid_list(struct popcorn_namespace *ns)
+static inline void dump_task_list(struct popcorn_namespace *ns)
 {
 	struct list_head *iter= NULL;
-	struct pid_list *objPtr;
-	spin_lock(&ns->pid_list_lock);
-	list_for_each(iter, &ns->ns_pid_list.pid_list_member) {
-		objPtr = list_entry(iter, struct pid_list, pid_list_member);
-		printk("%d -> ", objPtr->pid);
+	struct task_list *objPtr;
+	spin_lock(&ns->task_list_lock);
+	list_for_each(iter, &ns->ns_task_list.task_list_member) {
+		objPtr = list_entry(iter, struct task_list, task_list_member);
+		printk("%d -> ", objPtr->task->pid);
 	}
 	printk("\n");
-	spin_unlock(&ns->pid_list_lock);
+	spin_unlock(&ns->task_list_lock);
 }
 
 static inline int is_popcorn(struct task_struct *tsk)
@@ -63,73 +63,73 @@ static inline int is_popcorn(struct task_struct *tsk)
 	return 0;
 }
 
-static inline void init_pid_list(struct popcorn_namespace *ns)
+static inline void init_task_list(struct popcorn_namespace *ns)
 {
-	INIT_LIST_HEAD(&ns->ns_pid_list.pid_list_member);
-	spin_lock_init(&ns->pid_list_lock);
+	INIT_LIST_HEAD(&ns->ns_task_list.task_list_member);
+	spin_lock_init(&ns->task_list_lock);
+	ns->token == NULL;
 }
 
 // Pass the token to the next task in this namespace
 static inline void pass_token(struct popcorn_namespace *ns)
 {
-	spin_lock(&ns->pid_list_lock);
-	ns->token = container_of(ns->token->pid_list_member.prev, struct pid_list, pid_list_member);
-	printk("token is %d\n", ns->token->pid);
-	spin_unlock(&ns->pid_list_lock);
+	spin_lock(&ns->task_list_lock);
+	ns->token = container_of(ns->token->task_list_member.prev, struct task_list, task_list_member);
+	printk("token is %x, %d\n", ns->token->task, ns->token->task->pid);
+	spin_unlock(&ns->task_list_lock);
 }
 
-static inline int set_token(struct popcorn_namespace *ns, pid_t pid)
+static inline int set_token(struct popcorn_namespace *ns, struct task_struct *task)
 {
 	struct list_head *iter= NULL;
-	struct pid_list *objPtr;
-	spin_lock(&ns->pid_list_lock);
-	list_for_each(iter, &ns->ns_pid_list.pid_list_member) {
-		objPtr = list_entry(iter, struct pid_list, pid_list_member);
-		if ((uint64_t) objPtr->pid == (uint64_t) pid) {
+	struct task_list *objPtr;
+	spin_lock(&ns->task_list_lock);
+	list_for_each(iter, &ns->ns_task_list.task_list_member) {
+		objPtr = list_entry(iter, struct task_list, task_list_member);
+		if (objPtr->task == task) {
 			ns->token = objPtr;
-			spin_unlock(&ns->pid_list_lock);
+			spin_unlock(&ns->task_list_lock);
 			return 1;
 		}
 	}
-	spin_unlock(&ns->pid_list_lock);
-	printk("%d is not in ns\n", pid);
+	spin_unlock(&ns->task_list_lock);
 	return 0;
 }
 
-// Whenever a new thread is created, the pid should go to ns
-static inline int add_pid_to_ns(struct popcorn_namespace *ns, pid_t pid)
+// Whenever a new thread is created, the task should go to ns
+static inline int add_task_to_ns(struct popcorn_namespace *ns, struct task_struct *task)
 {
-	printk("Add %d to ns\n", pid);
-	struct pid_list *new_pid = kmalloc(sizeof(struct pid_list), GFP_KERNEL);
-	if (new_pid == NULL)
+	printk("Add %x, %d to ns\n", task, task->pid);
+	struct task_list *new_task = kmalloc(sizeof(struct task_list), GFP_KERNEL);
+	if (new_task == NULL)
 		return -1;
 
-	spin_lock(&ns->pid_list_lock);
-	memcpy(&new_pid->pid, &pid, sizeof(pid_t));
-	list_add_tail(&new_pid->pid_list_member, &ns->ns_pid_list.pid_list_member);
-	spin_unlock(&ns->pid_list_lock);
-	dump_pid_list(ns);
+	spin_lock(&ns->task_list_lock);
+	new_task->task = task;
+	list_add_tail(&new_task->task_list_member, &ns->ns_task_list.task_list_member);
+	spin_unlock(&ns->task_list_lock);
+	dump_task_list(ns);
 	return 0;
 }
 
-// Whenever a new thread is gone, the pid should get deleted
-static inline int remove_pid_from_ns(struct popcorn_namespace *ns, pid_t pid)
+// Whenever a new thread is gone, the task should get deleted
+static inline int remove_task_from_ns(struct popcorn_namespace *ns, struct task_struct *task)
 {
 	struct list_head *iter= NULL;
-	struct pid_list *objPtr;
-	spin_lock(&ns->pid_list_lock);
-	list_for_each(iter, &ns->ns_pid_list.pid_list_member) {
-		objPtr = list_entry(iter, struct pid_list, pid_list_member);
-		if ((uint64_t) objPtr->pid == (uint64_t) pid) {
+	struct task_list *objPtr;
+	spin_lock(&ns->task_list_lock);
+	list_for_each(iter, &ns->ns_task_list.task_list_member) {
+		objPtr = list_entry(iter, struct task_list, task_list_member);
+		if (objPtr->task == task) {
 			if (ns->token == objPtr)
 				pass_token(ns);
 			list_del(iter);
 			kfree(iter);
-			spin_unlock(&ns->pid_list_lock);
+			spin_unlock(&ns->task_list_lock);
 			return 0;
 		}
 	}
-	spin_unlock(&ns->pid_list_lock);
+	spin_unlock(&ns->task_list_lock);
 
 	return -1;
 }

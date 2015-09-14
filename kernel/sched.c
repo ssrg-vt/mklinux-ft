@@ -4421,16 +4421,6 @@ need_resched:
 	rcu_note_context_switch(cpu);
 	prev = rq->curr;
 
-	/*
-	 *if (is_popcorn(prev)) {
-	 *    printk("now %d, token %d\n", prev->pid, prev->nsproxy->pop_ns->token->pid);
-	 *    if ((uint64_t )(prev->nsproxy->pop_ns->token->pid) == (uint64_t )(prev->pid)) {
-	 *        pass_token(prev->nsproxy->pop_ns);
-	 *        printk("pass on to %d\n", prev->pid);
-	 *    }
-	 *}
-	 */
-
 	schedule_debug(prev);
 
 	if (sched_feat(HRTICK))
@@ -4494,12 +4484,12 @@ need_resched:
 	preempt_enable_no_resched();
 
 	if (is_popcorn(rq->curr)) {
-		if ((uint64_t )(rq->curr->nsproxy->pop_ns->token->pid) != (uint64_t )(rq->curr->pid)) {
-			printk("reschedule ? %d - %d\n", rq->curr->nsproxy->pop_ns->token->pid, rq->curr->pid);
+		if ((rq->curr->nsproxy->pop_ns->token->task) != (rq->curr)) {
+			printk("reschedule ? %d - %d\n", rq->curr->nsproxy->pop_ns->token->task->pid, rq->curr->pid);
 			//goto need_resched;
 		} else {
-			printk("pass token ? %d - %d\n", rq->curr->nsproxy->pop_ns->token->pid, rq->curr->pid);
-			pass_token(prev->nsproxy->pop_ns);
+			printk("pass token ? %d - %d\n", rq->curr->nsproxy->pop_ns->token->task->pid, rq->curr->pid);
+			pass_token(rq->curr->nsproxy->pop_ns);
 		}
 	}
 
