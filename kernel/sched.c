@@ -4484,9 +4484,10 @@ need_resched:
 	preempt_enable_no_resched();
 
 	if (is_popcorn(rq->curr)) {
-		if ((rq->curr->nsproxy->pop_ns->token->task) != (rq->curr)) {
-			printk("reschedule ? %d - %d\n", rq->curr->nsproxy->pop_ns->token->task->pid, rq->curr->pid);
-			//goto need_resched;
+		if ((rq->curr->nsproxy->pop_ns->token->task) != (rq->curr) &&
+				rq->curr->nsproxy->pop_ns->token->task->state == TASK_RUNNING) {
+			printk("reschedule ? %d[%x] - %d\n", rq->curr->nsproxy->pop_ns->token->task->pid, rq->curr->nsproxy->pop_ns->token->task->state, rq->curr->pid);
+			goto need_resched;
 		} else {
 			printk("pass token ? %d - %d\n", rq->curr->nsproxy->pop_ns->token->task->pid, rq->curr->pid);
 			pass_token(rq->curr->nsproxy->pop_ns);
