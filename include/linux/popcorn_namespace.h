@@ -13,6 +13,7 @@
 #include <linux/kref.h>
 #include <linux/list.h>
 #include <linux/slab.h>
+#include <asm/atomic.h>
 
 struct popcorn_namespace *get_popcorn_ns(struct popcorn_namespace *ns);
 struct popcorn_namespace *copy_pop_ns(unsigned long flags, struct popcorn_namespace *ns);
@@ -37,6 +38,7 @@ struct popcorn_namespace
 	struct task_list ns_task_list;
 	spinlock_t task_list_lock;
 	struct task_list *token;
+	atomic_t det_count;
 };
 
 extern struct popcorn_namespace init_pop_ns;
@@ -75,11 +77,10 @@ static inline void pass_token(struct popcorn_namespace *ns)
 {
 	spin_lock(&ns->task_list_lock);
 	//if (list_is_last(ns->token->task_list_member.prev, &ns->ns_task_list.task_list_member))
-	ns->token = container_of(ns->token->task_list_member.next, struct task_list, task_list_member);
-	if (ns->token->task == NULL) {
+	do {
 		ns->token = container_of(ns->token->task_list_member.next, struct task_list, task_list_member);
-	}
-	printk("token is %x, %d\n", ns->token, ns->token->task->pid);
+	} while (ns->token == NULL || ns->token->task == NULL);
+	//printk("token is %x, %d\n", ns->token, ns->token->task->pid);
 	spin_unlock(&ns->task_list_lock);
 }
 

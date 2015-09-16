@@ -1270,6 +1270,7 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 	p->pid = pid_nr(pid);
 #ifdef FT_POPCORN
 	if (is_popcorn(p)) {
+		p->ft_det_state = FT_DET_INACTIVE;
 		add_task_to_ns(p->nsproxy->pop_ns, p);
 	}
 #endif

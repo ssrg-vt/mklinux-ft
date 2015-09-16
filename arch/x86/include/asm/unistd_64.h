@@ -698,6 +698,10 @@ __SYSCALL(__NR_popcorn_test_ipi_latency, sys_popcorn_test_ipi_latency)
 __SYSCALL(__NR_popcorn_perf_start, sys_popcorn_perf_start)
 #define __NR_popcorn_perf_end       317
 __SYSCALL(__NR_popcorn_perf_end, sys_popcorn_perf_end)
+#define __NR_popcorn_det_start       318
+__SYSCALL(__NR_popcorn_det_start, sys_popcorn_det_start)
+#define __NR_popcorn_det_end       319
+__SYSCALL(__NR_popcorn_det_end, sys_popcorn_det_end)
 
 #ifndef __NO_STUBS
 #define __ARCH_WANT_OLD_READDIR

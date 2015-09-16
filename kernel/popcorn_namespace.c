@@ -14,6 +14,8 @@
 #include <linux/popcorn_namespace.h>
 #include <linux/spinlock.h>
 #include <linux/ft_replication.h>
+#include <linux/sched.h>
+#include <asm/atomic.h>
 
 static struct kmem_cache *popcorn_ns_cachep;
 struct proc_dir_entry *res;
@@ -50,6 +52,7 @@ static struct popcorn_namespace *create_popcorn_namespace(struct popcorn_namespa
 
 	kref_init(&ns->kref);
 	init_task_list(ns);
+	atomic_set(&ns->det_count, 0);
 	add_task_to_ns(ns, current);
 	set_token(ns, current);
 
@@ -187,6 +190,34 @@ int write_notify_popcorn_ns(struct file *file, const char __user *buffer, unsign
 	}
 
 	return count;
+}
+
+asmlinkage long sys_popcorn_det_start(void)
+{
+	if(!is_popcorn(current)) {
+		return 0;
+	}
+
+//	atomic_inc(&(current->nsproxy->pop_ns->det_count));
+	current->ft_det_state = FT_DET_ACTIVE;
+	do {
+		schedule();
+	} while (current->nsproxy->pop_ns->token->task != current);
+
+	return 1;
+}
+
+asmlinkage long sys_popcorn_det_end(void)
+{
+	if(!is_popcorn(current)) {
+		return 0;
+	}
+
+//	atomic_dec(&(current->nsproxy->pop_ns->det_count));
+	current->ft_det_state = FT_DET_INACTIVE;
+	pass_token(current->nsproxy->pop_ns);
+
+	return 1;
 }
 
 static int register_popcorn_ns(void)
