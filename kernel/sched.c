@@ -4485,15 +4485,17 @@ need_resched:
 
 	if (is_popcorn(rq->curr)) {
 		if ((rq->curr->nsproxy->pop_ns->token->task) != (rq->curr) &&
-				rq->curr->nsproxy->pop_ns->token->task->ft_det_state == FT_DET_ACTIVE) {
+				rq->curr->nsproxy->pop_ns->token->task->ft_det_state == FT_DET_ACTIVE &&
+				rq->curr->nsproxy->pop_ns->token->task->state == TASK_RUNNING) {
 			//printk("reschedule ? %d[%x] - %d\n", rq->curr->nsproxy->pop_ns->token->task->pid, rq->curr->nsproxy->pop_ns->token->task->state, rq->curr->pid);
 			goto need_resched;
 		} else if (rq->curr->nsproxy->pop_ns->token->task->state != TASK_RUNNING) {
-			//printk("%d is not runnable, pass token\n", rq->curr->pid);
+			/*
+			 * We have to pass on the token if it points to a non running task,
+			 * otherwise no one would ever get the token.
+			 */
 			pass_token(rq->curr->nsproxy->pop_ns);
-		} else {
-			//printk("reschedule ? %d[%x] - %d\n", rq->curr->nsproxy->pop_ns->token->task->pid, rq->curr->nsproxy->pop_ns->token->task->state, rq->curr->pid);
-		}
+		} 
 	}
 
 	if (need_resched())
