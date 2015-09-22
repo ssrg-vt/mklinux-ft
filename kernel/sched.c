@@ -4413,6 +4413,7 @@ static void __sched __schedule(void)
 	struct rq *rq;
 	int cpu;
 	struct pid_list *token;
+	unsigned long flags;
 
 need_resched:
 	preempt_disable();
@@ -4484,18 +4485,23 @@ need_resched:
 	preempt_enable_no_resched();
 
 	if (is_popcorn(rq->curr)) {
+		spin_lock_irqsave(&rq->curr->nsproxy->pop_ns->task_list_lock, flags);
 		if ((rq->curr->nsproxy->pop_ns->token->task) != (rq->curr) &&
 				rq->curr->nsproxy->pop_ns->token->task->ft_det_state == FT_DET_ACTIVE &&
 				rq->curr->nsproxy->pop_ns->token->task->state == TASK_RUNNING) {
 			//printk("reschedule ? %d[%x] - %d\n", rq->curr->nsproxy->pop_ns->token->task->pid, rq->curr->nsproxy->pop_ns->token->task->state, rq->curr->pid);
+			spin_unlock_irqrestore(&rq->curr->nsproxy->pop_ns->task_list_lock, flags);
 			goto need_resched;
 		} else if (rq->curr->nsproxy->pop_ns->token->task->state != TASK_RUNNING) {
 			/*
 			 * We have to pass on the token if it points to a non running task,
 			 * otherwise no one would ever get the token.
 			 */
+			spin_unlock_irqrestore(&rq->curr->nsproxy->pop_ns->task_list_lock, flags);
 			pass_token(rq->curr->nsproxy->pop_ns);
-		} 
+			spin_lock_irqsave(&rq->curr->nsproxy->pop_ns->task_list_lock, flags);
+		}
+		spin_unlock_irqrestore(&rq->curr->nsproxy->pop_ns->task_list_lock, flags);
 	}
 
 	if (need_resched())
