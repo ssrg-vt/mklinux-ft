@@ -50,7 +50,11 @@ static inline void dump_task_list(struct popcorn_namespace *ns)
 	spin_lock(&ns->task_list_lock);
 	list_for_each(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
-		printk("%d -> ", objPtr->task->pid);
+		smp_mb();
+		if (ns->token != NULL && objPtr->task == ns->token->task)
+			printk("%d[%d][%d][o] -> ", objPtr->task->pid, objPtr->task->state, objPtr->task->ft_det_state);
+		else
+			printk("%d[%d][%d][x] -> ", objPtr->task->pid, objPtr->task->state, objPtr->task->ft_det_state);
 	}
 	printk("\n");
 	spin_unlock(&ns->task_list_lock);
@@ -75,19 +79,19 @@ static inline void init_task_list(struct popcorn_namespace *ns)
 // Pass the token to the next task in this namespace
 static inline void pass_token(struct popcorn_namespace *ns)
 {
-	spin_lock(&ns->task_list_lock);
 	//if (list_is_last(ns->token->task_list_member.prev, &ns->ns_task_list.task_list_member))
 	do {
 		ns->token = container_of(ns->token->task_list_member.next, struct task_list, task_list_member);
+		smp_mb();
 	} while (ns->token == NULL || ns->token->task == NULL);
 	//printk("token is %x, %d\n", ns->token, ns->token->task->pid);
-	spin_unlock(&ns->task_list_lock);
 }
 
 static inline int set_token(struct popcorn_namespace *ns, struct task_struct *task)
 {
 	struct list_head *iter= NULL;
 	struct task_list *objPtr;
+
 	spin_lock(&ns->task_list_lock);
 	list_for_each(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
@@ -98,6 +102,7 @@ static inline int set_token(struct popcorn_namespace *ns, struct task_struct *ta
 		}
 	}
 	spin_unlock(&ns->task_list_lock);
+	smp_mb();
 	return 0;
 }
 
@@ -114,6 +119,7 @@ static inline int add_task_to_ns(struct popcorn_namespace *ns, struct task_struc
 	list_add_tail(&new_task->task_list_member, &ns->ns_task_list.task_list_member);
 	spin_unlock(&ns->task_list_lock);
 	dump_task_list(ns);
+	smp_mb();
 	return 0;
 }
 
@@ -127,9 +133,7 @@ static inline int remove_task_from_ns(struct popcorn_namespace *ns, struct task_
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		if (objPtr->task == task) {
 			if (ns->token == objPtr) {
-				spin_unlock(&ns->task_list_lock);
 				pass_token(ns);
-				spin_lock(&ns->task_list_lock);
 			}
 			list_del(iter);
 			kfree(iter);
@@ -140,6 +144,29 @@ static inline int remove_task_from_ns(struct popcorn_namespace *ns, struct task_
 	spin_unlock(&ns->task_list_lock);
 
 	return -1;
+}
+
+// Token might be on a dead guy, we need to move it out
+static inline void rescue_token(struct popcorn_namespace *ns)
+{
+	spin_lock(&ns->task_list_lock);
+	if (ns->token == NULL || ns->token->task == NULL) {
+		pass_token(ns);
+		spin_unlock(&ns->task_list_lock);
+		dump_task_list(ns);
+		return;
+	}
+	spin_unlock(&ns->task_list_lock);
+
+	//smp_mb();
+	spin_lock(&ns->task_list_lock);
+	if ((ns->token->task->state == TASK_INTERRUPTIBLE && ns->token->task->ft_det_state == FT_DET_INACTIVE)) {
+		pass_token(ns);
+		spin_unlock(&ns->task_list_lock);
+		printk("resuce done\n");
+		return;
+	}
+	spin_unlock(&ns->task_list_lock);
 }
 
 #endif /* _POPCORN_NAMESPACE_H */

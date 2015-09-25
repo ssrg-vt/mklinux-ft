@@ -198,24 +198,36 @@ asmlinkage long sys_popcorn_det_start(void)
 		return 0;
 	}
 
-//	atomic_inc(&(current->nsproxy->pop_ns->det_count));
 	current->ft_det_state = FT_DET_ACTIVE;
-	do {
+	smp_mb();
+	while (current->nsproxy->pop_ns->token->task != current) {
+		rescue_token(current->nsproxy->pop_ns);
 		schedule();
-	} while (current->nsproxy->pop_ns->token->task != current);
+	}
+	dump_task_list(current->nsproxy->pop_ns);
 
 	return 1;
 }
 
 asmlinkage long sys_popcorn_det_end(void)
 {
+	struct popcorn_namespace *ns;
+
 	if(!is_popcorn(current)) {
 		return 0;
 	}
 
+	ns = current->nsproxy->pop_ns;
+
 //	atomic_dec(&(current->nsproxy->pop_ns->det_count));
+	spin_lock(&ns->task_list_lock);
 	current->ft_det_state = FT_DET_INACTIVE;
+	spin_unlock(&ns->task_list_lock);
+	//smp_mb();
+	dump_task_list(ns);
+	spin_lock(&ns->task_list_lock);
 	pass_token(current->nsproxy->pop_ns);
+	spin_unlock(&ns->task_list_lock);
 
 	return 1;
 }

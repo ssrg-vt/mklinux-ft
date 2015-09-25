@@ -198,8 +198,9 @@ print_cfs_rq(struct seq_file *m, int cpu, struct cfs_rq *cfs_rq)
 /*
  * Task states for FT deterministic execution
  */
-#define FT_DET_INACTIVE 0
-#define FT_DET_ACTIVE 1
+#define FT_DET_CREATED 0
+#define FT_DET_INACTIVE 1
+#define FT_DET_ACTIVE 2
 
 #define TASK_STATE_TO_CHAR_STR "RSDTtZXxKW"
 
@@ -1616,6 +1617,7 @@ struct task_struct {
 	int next_id_resources;
 	int id_syscall;
 	void *useful;
+	int prev_det_cpu;
 	
 	struct ft_pop_rep *ft_popcorn;
 	int ft_det_state;
