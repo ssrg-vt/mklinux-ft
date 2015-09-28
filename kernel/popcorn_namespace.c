@@ -192,44 +192,51 @@ int write_notify_popcorn_ns(struct file *file, const char __user *buffer, unsign
 	return count;
 }
 
-asmlinkage long sys_popcorn_det_start(void)
+static long __det_start(struct task_struct *task)
 {
-	if(!is_popcorn(current)) {
+	if(!is_popcorn(task)) {
 		return 0;
 	}
 
-	current->ft_det_state = FT_DET_ACTIVE;
+	task->ft_det_state = FT_DET_ACTIVE;
 	smp_mb();
-	while (current->nsproxy->pop_ns->token->task != current) {
-		rescue_token(current->nsproxy->pop_ns);
+	while (task->nsproxy->pop_ns->token->task != task) {
+		rescue_token(task->nsproxy->pop_ns);
 		schedule();
 	}
-	dump_task_list(current->nsproxy->pop_ns);
+	dump_task_list(task->nsproxy->pop_ns);
+
+	return 1;
+}
+
+asmlinkage long sys_popcorn_det_start(void)
+{
+	__det_start(current);
+}
+
+static long __det_end(struct task_struct *task)
+{
+	struct popcorn_namespace *ns;
+
+	if(!is_popcorn(task)) {
+		return 0;
+	}
+
+	ns = task->nsproxy->pop_ns;
+
+	task->ft_det_state = FT_DET_INACTIVE;
+	smp_mb();
+	dump_task_list(ns);
+	spin_lock(&ns->task_list_lock);
+	pass_token(task->nsproxy->pop_ns);
+	spin_unlock(&ns->task_list_lock);
 
 	return 1;
 }
 
 asmlinkage long sys_popcorn_det_end(void)
 {
-	struct popcorn_namespace *ns;
-
-	if(!is_popcorn(current)) {
-		return 0;
-	}
-
-	ns = current->nsproxy->pop_ns;
-
-//	atomic_dec(&(current->nsproxy->pop_ns->det_count));
-	spin_lock(&ns->task_list_lock);
-	current->ft_det_state = FT_DET_INACTIVE;
-	spin_unlock(&ns->task_list_lock);
-	//smp_mb();
-	dump_task_list(ns);
-	spin_lock(&ns->task_list_lock);
-	pass_token(current->nsproxy->pop_ns);
-	spin_unlock(&ns->task_list_lock);
-
-	return 1;
+	return __det_end(current);
 }
 
 static int register_popcorn_ns(void)

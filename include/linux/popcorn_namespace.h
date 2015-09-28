@@ -79,12 +79,10 @@ static inline void init_task_list(struct popcorn_namespace *ns)
 // Pass the token to the next task in this namespace
 static inline void pass_token(struct popcorn_namespace *ns)
 {
-	//if (list_is_last(ns->token->task_list_member.prev, &ns->ns_task_list.task_list_member))
 	do {
 		ns->token = container_of(ns->token->task_list_member.next, struct task_list, task_list_member);
 		smp_mb();
 	} while (ns->token == NULL || ns->token->task == NULL);
-	//printk("token is %x, %d\n", ns->token, ns->token->task->pid);
 }
 
 static inline int set_token(struct popcorn_namespace *ns, struct task_struct *task)
@@ -147,6 +145,7 @@ static inline int remove_task_from_ns(struct popcorn_namespace *ns, struct task_
 }
 
 // Token might be on a dead guy, we need to move it out
+// TODO: we need to figure out whether the task is really dead.
 static inline void rescue_token(struct popcorn_namespace *ns)
 {
 	spin_lock(&ns->task_list_lock);
