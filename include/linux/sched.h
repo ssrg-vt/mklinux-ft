@@ -1617,7 +1617,7 @@ struct task_struct {
 	int next_id_resources;
 	int id_syscall;
 	void *useful;
-	int prev_det_cpu;
+	int passed_at_blocking;
 	
 	struct ft_pop_rep *ft_popcorn;
 	int ft_det_state;

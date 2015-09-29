@@ -192,7 +192,7 @@ int write_notify_popcorn_ns(struct file *file, const char __user *buffer, unsign
 	return count;
 }
 
-static long __det_start(struct task_struct *task)
+long __det_start(struct task_struct *task)
 {
 	if(!is_popcorn(task)) {
 		return 0;
@@ -214,7 +214,7 @@ asmlinkage long sys_popcorn_det_start(void)
 	__det_start(current);
 }
 
-static long __det_end(struct task_struct *task)
+long __det_end(struct task_struct *task)
 {
 	struct popcorn_namespace *ns;
 

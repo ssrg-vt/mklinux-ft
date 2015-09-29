@@ -1271,6 +1271,7 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 #ifdef FT_POPCORN
 	if (is_popcorn(p)) {
 		p->ft_det_state = FT_DET_CREATED;
+		p->passed_at_blocking = 0;
 		add_task_to_ns(p->nsproxy->pop_ns, p);
 		rescue_token(p->nsproxy->pop_ns);
 	}

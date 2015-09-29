@@ -10,6 +10,7 @@
 #include <linux/spinlock.h>
 #include <linux/sched.h>
 #include <linux/pcn_kmsg.h>
+#include <linux/popcorn_namespace.h>
 
 #define FT_CSYSC_VERBOSE 0
 #if FT_CSYSC_VERBOSE

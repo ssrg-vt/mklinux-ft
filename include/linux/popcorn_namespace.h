@@ -21,6 +21,8 @@ void free_popcorn_ns(struct kref *kref);
 void put_pop_ns(struct popcorn_namespace *ns);
 int associate_to_popcorn_ns(struct task_struct * tsk, int replication_degree);
 int is_popcorn_namespace_active(struct popcorn_namespace* ns);
+long __det_start(struct task_struct *task);
+long __det_end(struct task_struct *task);
 
 struct task_list {
 	struct list_head task_list_member;
