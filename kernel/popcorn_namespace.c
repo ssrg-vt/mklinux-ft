@@ -207,7 +207,8 @@ long __det_start(struct task_struct *task)
 	while (!have_token(task)) {
 		schedule();
 	}
-	dump_task_list(task->nsproxy->pop_ns);
+	//dump_task_list(task->nsproxy->pop_ns);
+	update_tick(task);
 
 	return 1;
 }
@@ -230,7 +231,7 @@ long __det_end(struct task_struct *task)
 	task->ft_det_state = FT_DET_INACTIVE;
 	update_tick(task);
 	smp_mb();
-	dump_task_list(ns);
+	//dump_task_list(ns);
 
 	return 1;
 }

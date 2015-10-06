@@ -138,7 +138,7 @@ static inline int remove_task_from_ns(struct popcorn_namespace *ns, struct task_
 			kfree(iter);
 			update_token(ns);
 			spin_unlock(&ns->task_list_lock);
-			dump_task_list(ns);
+			//dump_task_list(ns);
 			return 0;
 		}
 	}
@@ -155,7 +155,7 @@ static inline void rescue_token(struct popcorn_namespace *ns)
 	if (ns->token == NULL || ns->token->task == NULL) {
 		pass_token(ns);
 		spin_unlock(&ns->task_list_lock);
-		dump_task_list(ns);
+		//dump_task_list(ns);
 		return;
 	}
 	spin_unlock(&ns->task_list_lock);
@@ -165,7 +165,7 @@ static inline void rescue_token(struct popcorn_namespace *ns)
 	if ((ns->token->task->state == TASK_INTERRUPTIBLE && ns->token->task->ft_det_state == FT_DET_INACTIVE)) {
 		pass_token(ns);
 		spin_unlock(&ns->task_list_lock);
-		printk("resuce done\n");
+		//printk("resuce done\n");
 		return;
 	}
 	spin_unlock(&ns->task_list_lock);
@@ -184,12 +184,13 @@ static inline int update_token(struct popcorn_namespace *ns)
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		tick_value = atomic_read(&objPtr->task->ft_det_tick);
 		if (min_value >= tick_value &&
-				objPtr->task->state == TASK_RUNNING) {
+				(objPtr->task->state == TASK_RUNNING ||
+				 objPtr->task->state == TASK_WAKING)) {
 			new_token = objPtr;
 			min_value = tick_value;
 		}
 	}
-	printk("Token updated to %d(%d)\n", objPtr->task->pid, tick_value);
+	//printk("Token updated to %d(%d)\n", objPtr->task->pid, tick_value);
 	ns->token = new_token;
 	if (ns->token != NULL)
 		ns->last_tick = atomic_read(&ns->token->task->ft_det_tick);
@@ -204,15 +205,15 @@ static inline int update_tick(struct task_struct *task)
 	ns = task->nsproxy->pop_ns;
 	atomic_inc(&task->ft_det_tick);
 
+	spin_lock(&ns->task_list_lock);
 	if (ns->token == NULL) {
-		//set_token(ns, task);
+		spin_unlock(&ns->task_list_lock);
 		return 1;
 	}
 
-	spin_lock(&ns->task_list_lock);
 	update_token(ns);
 	spin_unlock(&ns->task_list_lock);
-	dump_task_list(ns);
+	//dump_task_list(ns);
 
 	return 1;
 }
@@ -227,7 +228,6 @@ static inline void det_wake_up(struct task_struct *task)
 	spin_lock(&ns->task_list_lock);
 	atomic_set(&task->ft_det_tick, ns->last_tick);
 	spin_unlock(&ns->task_list_lock);
-	update_tick(task);
 }
 
 static inline int have_token(struct task_struct *task)

@@ -388,11 +388,6 @@ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
 		inc_syscr(current);
 	}
 
-	/*
-	 *if (is_popcorn(current)) {
-	 *    det_wake_up(current);
-	 *}
-	 */
 	return ret;
 }
 
@@ -420,9 +415,6 @@ ssize_t do_sync_write(struct file *filp, const char __user *buf, size_t len, lof
 		ret = wait_on_sync_kiocb(&kiocb);
 	*ppos = kiocb.ki_pos;
 
-	if (is_popcorn(current)) {
-		det_wake_up(current);
-	}
 	return ret;
 }
 

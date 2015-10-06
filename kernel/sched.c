@@ -2867,6 +2867,9 @@ try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 	p->sched_contributes_to_load = !!task_contributes_to_load(p);
 	p->state = TASK_WAKING;
 
+	if (is_popcorn(p))
+		det_wake_up(p);
+
 	if (p->sched_class->task_waking)
 		p->sched_class->task_waking(p);
 
