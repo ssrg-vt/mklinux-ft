@@ -374,12 +374,6 @@ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
 	if (unlikely(!access_ok(VERIFY_WRITE, buf, count)))
 		return -EFAULT;
 
-	if (is_popcorn(current) && current->ft_det_state == FT_DET_ACTIVE) {
-		__det_end(current);
-		printk("%d skip blocking\n", current->pid);
-		current->passed_at_blocking = 1;
-	}
-
 	ret = rw_verify_area(READ, file, pos, count);
 	if (ret >= 0) {
 		count = ret;
@@ -394,11 +388,11 @@ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
 		inc_syscr(current);
 	}
 
-	if (is_popcorn(current) && current->passed_at_blocking == 1) {
-		current->passed_at_blocking = 0;
-		printk("%d from blocking\n", current->pid);
-		__det_start(current);
-	}
+	/*
+	 *if (is_popcorn(current)) {
+	 *    det_wake_up(current);
+	 *}
+	 */
 	return ret;
 }
 
@@ -415,12 +409,6 @@ ssize_t do_sync_write(struct file *filp, const char __user *buf, size_t len, lof
 	kiocb.ki_left = len;
 	kiocb.ki_nbytes = len;
 
-	if (is_popcorn(current) && current->ft_det_state == FT_DET_ACTIVE) {
-		__det_end(current);
-		printk("%d skip blocking\n", current->pid);
-		current->passed_at_blocking = 1;
-	}
-
 	for (;;) {
 		ret = filp->f_op->aio_write(&kiocb, &iov, 1, kiocb.ki_pos);
 		if (ret != -EIOCBRETRY)
@@ -432,10 +420,8 @@ ssize_t do_sync_write(struct file *filp, const char __user *buf, size_t len, lof
 		ret = wait_on_sync_kiocb(&kiocb);
 	*ppos = kiocb.ki_pos;
 
-	if (is_popcorn(current) && current->passed_at_blocking == 1) {
-		current->passed_at_blocking = 0;
-		printk("%d from blocking\n", current->pid);
-		__det_start(current);
+	if (is_popcorn(current)) {
+		det_wake_up(current);
 	}
 	return ret;
 }

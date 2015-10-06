@@ -3071,8 +3071,10 @@ void wake_up_new_task(struct task_struct *p)
 #endif
 
 	p->ft_det_state = FT_DET_INACTIVE;
-	if (is_popcorn(p))
-		rescue_token(p->nsproxy->pop_ns);
+	if (is_popcorn(p)) {
+		//rescue_token(p->nsproxy->pop_ns);
+		det_wake_up(p);
+	}
 
 	rq = __task_rq_lock(p);
 	activate_task(rq, p, 0);

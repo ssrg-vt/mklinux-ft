@@ -21,6 +21,7 @@ void free_popcorn_ns(struct kref *kref);
 void put_pop_ns(struct popcorn_namespace *ns);
 int associate_to_popcorn_ns(struct task_struct * tsk, int replication_degree);
 int is_popcorn_namespace_active(struct popcorn_namespace* ns);
+static inline int update_token(struct popcorn_namespace *ns);
 long __det_start(struct task_struct *task);
 long __det_end(struct task_struct *task);
 
@@ -40,7 +41,7 @@ struct popcorn_namespace
 	struct task_list ns_task_list;
 	spinlock_t task_list_lock;
 	struct task_list *token;
-	atomic_t det_count;
+	int last_tick;
 };
 
 extern struct popcorn_namespace init_pop_ns;
@@ -54,9 +55,9 @@ static inline void dump_task_list(struct popcorn_namespace *ns)
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		smp_mb();
 		if (ns->token != NULL && objPtr->task == ns->token->task)
-			printk("%d[%d][%d][o] -> ", objPtr->task->pid, objPtr->task->state, objPtr->task->ft_det_state);
+			printk("%d(%d)[%d][%d][o] -> ", objPtr->task->pid, atomic_read(&objPtr->task->ft_det_tick), objPtr->task->state, objPtr->task->ft_det_state);
 		else
-			printk("%d[%d][%d][x] -> ", objPtr->task->pid, objPtr->task->state, objPtr->task->ft_det_state);
+			printk("%d(%d)[%d][%d][x] -> ", objPtr->task->pid, atomic_read(&objPtr->task->ft_det_tick), objPtr->task->state, objPtr->task->ft_det_state);
 	}
 	printk("\n");
 	spin_unlock(&ns->task_list_lock);
@@ -75,7 +76,8 @@ static inline void init_task_list(struct popcorn_namespace *ns)
 {
 	INIT_LIST_HEAD(&ns->ns_task_list.task_list_member);
 	spin_lock_init(&ns->task_list_lock);
-	ns->token == NULL;
+	ns->token = NULL;
+	ns->last_tick = 0;
 }
 
 // Pass the token to the next task in this namespace
@@ -114,11 +116,11 @@ static inline int add_task_to_ns(struct popcorn_namespace *ns, struct task_struc
 	if (new_task == NULL)
 		return -1;
 
+	atomic_set(&task->ft_det_tick, 0);
 	spin_lock(&ns->task_list_lock);
 	new_task->task = task;
 	list_add_tail(&new_task->task_list_member, &ns->ns_task_list.task_list_member);
 	spin_unlock(&ns->task_list_lock);
-	dump_task_list(ns);
 	smp_mb();
 	return 0;
 }
@@ -132,12 +134,11 @@ static inline int remove_task_from_ns(struct popcorn_namespace *ns, struct task_
 	list_for_each(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		if (objPtr->task == task) {
-			if (ns->token == objPtr) {
-				pass_token(ns);
-			}
 			list_del(iter);
 			kfree(iter);
+			update_token(ns);
 			spin_unlock(&ns->task_list_lock);
+			dump_task_list(ns);
 			return 0;
 		}
 	}
@@ -168,6 +169,81 @@ static inline void rescue_token(struct popcorn_namespace *ns)
 		return;
 	}
 	spin_unlock(&ns->task_list_lock);
+}
+
+static inline int update_token(struct popcorn_namespace *ns)
+{
+	struct list_head *iter= NULL;
+	struct task_list *objPtr;
+	struct task_list *new_token = ns->token;
+	int tick_value = 0;
+	// TODO: overflow
+	int min_value = 999999;
+
+	list_for_each(iter, &ns->ns_task_list.task_list_member) {
+		objPtr = list_entry(iter, struct task_list, task_list_member);
+		tick_value = atomic_read(&objPtr->task->ft_det_tick);
+		if (min_value >= tick_value &&
+				objPtr->task->state == TASK_RUNNING) {
+			new_token = objPtr;
+			min_value = tick_value;
+		}
+	}
+	printk("Token updated to %d(%d)\n", objPtr->task->pid, tick_value);
+	ns->token = new_token;
+	if (ns->token != NULL)
+		ns->last_tick = atomic_read(&ns->token->task->ft_det_tick);
+	smp_mb();
+	return 0;
+}
+
+static inline int update_tick(struct task_struct *task)
+{
+	struct popcorn_namespace *ns;
+
+	ns = task->nsproxy->pop_ns;
+	atomic_inc(&task->ft_det_tick);
+
+	if (ns->token == NULL) {
+		//set_token(ns, task);
+		return 1;
+	}
+
+	spin_lock(&ns->task_list_lock);
+	update_token(ns);
+	spin_unlock(&ns->task_list_lock);
+	dump_task_list(ns);
+
+	return 1;
+}
+
+static inline void det_wake_up(struct task_struct *task)
+{
+	int tick;
+	struct popcorn_namespace *ns;
+
+	ns = task->nsproxy->pop_ns;
+
+	spin_lock(&ns->task_list_lock);
+	atomic_set(&task->ft_det_tick, ns->last_tick);
+	spin_unlock(&ns->task_list_lock);
+	update_tick(task);
+}
+
+static inline int have_token(struct task_struct *task)
+{
+	struct popcorn_namespace *ns;
+
+	ns = task->nsproxy->pop_ns;
+
+	spin_lock(&ns->task_list_lock);
+	if (ns->token->task == task) {
+		spin_unlock(&ns->task_list_lock);
+		return 1;
+	} else {
+		spin_unlock(&ns->task_list_lock);
+		return 0;
+	}
 }
 
 #endif /* _POPCORN_NAMESPACE_H */

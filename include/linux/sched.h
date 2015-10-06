@@ -1617,10 +1617,10 @@ struct task_struct {
 	int next_id_resources;
 	int id_syscall;
 	void *useful;
-	int passed_at_blocking;
 	
 	struct ft_pop_rep *ft_popcorn;
 	int ft_det_state;
+	atomic_t ft_det_tick;
 #endif
 };
 

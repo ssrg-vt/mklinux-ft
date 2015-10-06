@@ -52,7 +52,6 @@ static struct popcorn_namespace *create_popcorn_namespace(struct popcorn_namespa
 
 	kref_init(&ns->kref);
 	init_task_list(ns);
-	atomic_set(&ns->det_count, 0);
 	add_task_to_ns(ns, current);
 	set_token(ns, current);
 
@@ -194,14 +193,18 @@ int write_notify_popcorn_ns(struct file *file, const char __user *buffer, unsign
 
 long __det_start(struct task_struct *task)
 {
+	struct popcorn_namespace *ns;
+
 	if(!is_popcorn(task)) {
 		return 0;
 	}
 
-	task->ft_det_state = FT_DET_ACTIVE;
+	ns = task->nsproxy->pop_ns;
 	smp_mb();
-	while (task->nsproxy->pop_ns->token->task != task) {
-		rescue_token(task->nsproxy->pop_ns);
+	spin_lock(&ns->task_list_lock);
+	update_token(ns);
+	spin_unlock(&ns->task_list_lock);
+	while (!have_token(task)) {
 		schedule();
 	}
 	dump_task_list(task->nsproxy->pop_ns);
@@ -225,11 +228,9 @@ long __det_end(struct task_struct *task)
 	ns = task->nsproxy->pop_ns;
 
 	task->ft_det_state = FT_DET_INACTIVE;
+	update_tick(task);
 	smp_mb();
 	dump_task_list(ns);
-	spin_lock(&ns->task_list_lock);
-	pass_token(task->nsproxy->pop_ns);
-	spin_unlock(&ns->task_list_lock);
 
 	return 1;
 }
