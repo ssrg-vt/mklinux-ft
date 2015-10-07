@@ -23,6 +23,7 @@
 #include <net/route.h>
 #include <net/tcp_states.h>
 #include <net/xfrm.h>
+#include <linux/popcorn_namespace.h>
 
 #ifdef INET_CSK_DEBUG
 const char inet_csk_timer_bug_msg[] = "inet_csk BUG: unknown timer value\n";
@@ -288,6 +289,7 @@ struct sock *inet_csk_accept(struct sock *sk, int flags, int *err)
 			goto out_err;
 
 		error = inet_csk_wait_for_connect(sk, timeo);
+		det_wake_up(current);
 		if (error)
 			goto out_err;
 	}

@@ -40,6 +40,7 @@ struct popcorn_namespace
 	// This one stores all the pids under this namespace, ordered by their creation time
 	struct task_list ns_task_list;
 	spinlock_t task_list_lock;
+	spinlock_t task_tick_lock;
 	struct task_list *token;
 	int last_tick;
 };
@@ -76,6 +77,7 @@ static inline void init_task_list(struct popcorn_namespace *ns)
 {
 	INIT_LIST_HEAD(&ns->ns_task_list.task_list_member);
 	spin_lock_init(&ns->task_list_lock);
+	spin_lock_init(&ns->task_tick_lock);
 	ns->token = NULL;
 	ns->last_tick = 0;
 }
@@ -117,8 +119,8 @@ static inline int add_task_to_ns(struct popcorn_namespace *ns, struct task_struc
 		return -1;
 
 	atomic_set(&task->ft_det_tick, 0);
-	spin_lock(&ns->task_list_lock);
 	new_task->task = task;
+	spin_lock(&ns->task_list_lock);
 	list_add_tail(&new_task->task_list_member, &ns->ns_task_list.task_list_member);
 	spin_unlock(&ns->task_list_lock);
 	smp_mb();
@@ -147,30 +149,6 @@ static inline int remove_task_from_ns(struct popcorn_namespace *ns, struct task_
 	return -1;
 }
 
-// Token might be on a dead guy, we need to move it out
-// TODO: we need to figure out whether the task is really dead.
-static inline void rescue_token(struct popcorn_namespace *ns)
-{
-	spin_lock(&ns->task_list_lock);
-	if (ns->token == NULL || ns->token->task == NULL) {
-		pass_token(ns);
-		spin_unlock(&ns->task_list_lock);
-		//dump_task_list(ns);
-		return;
-	}
-	spin_unlock(&ns->task_list_lock);
-
-	//smp_mb();
-	spin_lock(&ns->task_list_lock);
-	if ((ns->token->task->state == TASK_INTERRUPTIBLE && ns->token->task->ft_det_state == FT_DET_INACTIVE)) {
-		pass_token(ns);
-		spin_unlock(&ns->task_list_lock);
-		//printk("resuce done\n");
-		return;
-	}
-	spin_unlock(&ns->task_list_lock);
-}
-
 static inline int update_token(struct popcorn_namespace *ns)
 {
 	struct list_head *iter= NULL;
@@ -178,7 +156,7 @@ static inline int update_token(struct popcorn_namespace *ns)
 	struct task_list *new_token = ns->token;
 	int tick_value = 0;
 	// TODO: overflow
-	int min_value = 999999;
+	int min_value = 2147483647;
 
 	list_for_each(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
@@ -192,8 +170,10 @@ static inline int update_token(struct popcorn_namespace *ns)
 	}
 	//printk("Token updated to %d(%d)\n", objPtr->task->pid, tick_value);
 	ns->token = new_token;
+	spin_lock(&ns->task_tick_lock);
 	if (ns->token != NULL)
 		ns->last_tick = atomic_read(&ns->token->task->ft_det_tick);
+	spin_unlock(&ns->task_tick_lock);
 	smp_mb();
 	return 0;
 }
@@ -226,8 +206,12 @@ static inline void det_wake_up(struct task_struct *task)
 	ns = task->nsproxy->pop_ns;
 
 	spin_lock(&ns->task_list_lock);
-	atomic_set(&task->ft_det_tick, ns->last_tick);
+	update_token(ns);
 	spin_unlock(&ns->task_list_lock);
+	spin_lock(&ns->task_tick_lock);
+	printk("Waking up %d with tick %d\n", task->pid, ns->last_tick);
+	atomic_set(&task->ft_det_tick, ns->last_tick);
+	spin_unlock(&ns->task_tick_lock);
 }
 
 static inline int have_token(struct task_struct *task)
