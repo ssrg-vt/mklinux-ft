@@ -289,7 +289,10 @@ struct sock *inet_csk_accept(struct sock *sk, int flags, int *err)
 			goto out_err;
 
 		error = inet_csk_wait_for_connect(sk, timeo);
-		det_wake_up(current);
+
+		if (is_popcorn(current))
+			det_wake_up(current);
+
 		if (error)
 			goto out_err;
 	}

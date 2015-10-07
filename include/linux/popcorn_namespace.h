@@ -131,9 +131,10 @@ static inline int add_task_to_ns(struct popcorn_namespace *ns, struct task_struc
 static inline int remove_task_from_ns(struct popcorn_namespace *ns, struct task_struct *task)
 {
 	struct list_head *iter= NULL;
+	struct list_head *n;
 	struct task_list *objPtr;
 	spin_lock(&ns->task_list_lock);
-	list_for_each(iter, &ns->ns_task_list.task_list_member) {
+	list_for_each_safe(iter, n, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		if (objPtr->task == task) {
 			list_del(iter);
@@ -156,7 +157,7 @@ static inline int update_token(struct popcorn_namespace *ns)
 	struct task_list *new_token = ns->token;
 	int tick_value = 0;
 	// TODO: overflow
-	int min_value = 2147483647;
+	int min_value = 999999999;
 
 	list_for_each(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
@@ -170,10 +171,9 @@ static inline int update_token(struct popcorn_namespace *ns)
 	}
 	//printk("Token updated to %d(%d)\n", objPtr->task->pid, tick_value);
 	ns->token = new_token;
-	spin_lock(&ns->task_tick_lock);
-	if (ns->token != NULL)
+	if (ns->token != NULL &&
+			ns->token->task != NULL)
 		ns->last_tick = atomic_read(&ns->token->task->ft_det_tick);
-	spin_unlock(&ns->task_tick_lock);
 	smp_mb();
 	return 0;
 }
@@ -205,9 +205,6 @@ static inline void det_wake_up(struct task_struct *task)
 
 	ns = task->nsproxy->pop_ns;
 
-	spin_lock(&ns->task_list_lock);
-	update_token(ns);
-	spin_unlock(&ns->task_list_lock);
 	spin_lock(&ns->task_tick_lock);
 	printk("Waking up %d with tick %d\n", task->pid, ns->last_tick);
 	atomic_set(&task->ft_det_tick, ns->last_tick);

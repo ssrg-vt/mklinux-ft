@@ -201,6 +201,9 @@ long __det_start(struct task_struct *task)
 
 	ns = task->nsproxy->pop_ns;
 	smp_mb();
+	spin_lock(&ns->task_list_lock);
+	update_token(ns);
+	spin_unlock(&ns->task_list_lock);
 	while (!have_token(task)) {
 		schedule();
 		spin_lock(&ns->task_list_lock);
