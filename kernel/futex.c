@@ -2702,9 +2702,11 @@ long do_futex(u32 __user *uaddr, int op, u32 val, ktime_t *timeout,
 		ret = -ENOSYS;
 	}
 
-	if (ns != NULL) {
-		det_wake_up(current);
-	}
+	/*
+	 *if (ns != NULL) {
+	 *    det_wake_up(current);
+	 *}
+	 */
 	return ret;
 }
 

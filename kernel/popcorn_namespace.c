@@ -211,7 +211,7 @@ long __det_start(struct task_struct *task)
 		spin_unlock(&ns->task_list_lock);
 	}
 	//dump_task_list(task->nsproxy->pop_ns);
-	update_tick(task);
+	//update_tick(task);
 
 	return 1;
 }
@@ -219,6 +219,13 @@ long __det_start(struct task_struct *task)
 asmlinkage long sys_popcorn_det_start(void)
 {
 	__det_start(current);
+}
+
+asmlinkage long sys_popcorn_det_tick(void)
+{
+	atomic_inc(&current->ft_det_tick);
+
+	return 0;
 }
 
 long __det_end(struct task_struct *task)

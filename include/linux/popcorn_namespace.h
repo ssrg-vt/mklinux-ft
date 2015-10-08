@@ -183,6 +183,7 @@ static inline int update_tick(struct task_struct *task)
 	struct popcorn_namespace *ns;
 
 	ns = task->nsproxy->pop_ns;
+	smp_mb();
 	atomic_inc(&task->ft_det_tick);
 
 	spin_lock(&ns->task_list_lock);
@@ -206,8 +207,11 @@ static inline void det_wake_up(struct task_struct *task)
 	ns = task->nsproxy->pop_ns;
 
 	spin_lock(&ns->task_tick_lock);
-	printk("Waking up %d with tick %d\n", task->pid, ns->last_tick);
-	atomic_set(&task->ft_det_tick, ns->last_tick);
+	printk("Waking up %d from %pS with tick %d\n", task->pid, __builtin_return_address(1), ns->last_tick);
+	dump_task_list(ns);
+	smp_mb();
+	if (ns->last_tick >= atomic_read(&task->ft_det_tick))
+		atomic_set(&task->ft_det_tick, ns->last_tick);
 	spin_unlock(&ns->task_tick_lock);
 }
 
