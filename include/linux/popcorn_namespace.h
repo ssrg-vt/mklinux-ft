@@ -210,17 +210,17 @@ static inline void det_wake_up(struct task_struct *task)
 
 	ns = task->nsproxy->pop_ns;
 
-	//printk("Waking up %d from %pS with tick %d\n", task->pid, __builtin_return_address(1), ns->last_tick);
-	//dump_task_list(ns);
 	smp_mb();
 	spin_lock_irqsave(&ns->task_list_lock, flags);
-	if (ns->last_tick > atomic_read(&task->ft_det_tick))
+	if (ns->last_tick > atomic_read(&task->ft_det_tick)) {
 		atomic_set(&task->ft_det_tick, ns->last_tick);
-	update_token(ns);
-	spin_unlock_irqrestore(&ns->task_list_lock, flags);
-	if (task->ft_det_state == FT_DET_ACTIVE) {
-		__det_start(task);
+		update_token(ns);
+		spin_unlock_irqrestore(&ns->task_list_lock, flags);
+	} else {
+		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	}
+//	printk("Waking up %d from %pS with tick %d\n", task->pid, __builtin_return_address(1), task->ft_det_tick);
+//	dump_task_list(ns);
 }
 
 static inline int have_token(struct task_struct *task)
@@ -235,6 +235,7 @@ static inline int have_token(struct task_struct *task)
 		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 		return 1;
 	} else {
+		update_token(ns);
 		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 		return 0;
 	}

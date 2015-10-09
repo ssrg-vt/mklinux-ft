@@ -107,8 +107,10 @@ void finish_wait(wait_queue_head_t *q, wait_queue_t *wait)
 	unsigned long flags;
 
 	__set_current_state(TASK_RUNNING);
-	if (is_popcorn(current))
-		det_wake_up(current);
+	/*
+	 *if (is_popcorn(current))
+	 *    det_wake_up(current);
+	 */
 	/*
 	 * We can check for list emptiness outside the lock
 	 * IFF:

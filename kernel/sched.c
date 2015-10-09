@@ -2883,8 +2883,10 @@ stat:
 out:
 	raw_spin_unlock_irqrestore(&p->pi_lock, flags);
 
-	if (is_popcorn(p))
-		det_wake_up(p);
+	/*
+	 *if (is_popcorn(p))
+	 *    det_wake_up(p);
+	 */
 
 	return success;
 }
