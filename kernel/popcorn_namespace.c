@@ -194,21 +194,23 @@ int write_notify_popcorn_ns(struct file *file, const char __user *buffer, unsign
 long __det_start(struct task_struct *task)
 {
 	struct popcorn_namespace *ns;
+	unsigned long flags;
 
 	if(!is_popcorn(task)) {
 		return 0;
 	}
 
 	ns = task->nsproxy->pop_ns;
+	task->ft_det_state = FT_DET_ACTIVE;
 	smp_mb();
-	spin_lock(&ns->task_list_lock);
+	spin_lock_irqsave(&ns->task_list_lock, flags);
 	update_token(ns);
-	spin_unlock(&ns->task_list_lock);
+	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	while (!have_token(task)) {
 		schedule();
-		spin_lock(&ns->task_list_lock);
+		spin_lock_irqsave(&ns->task_list_lock, flags);
 		update_token(ns);
-		spin_unlock(&ns->task_list_lock);
+		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	}
 	//dump_task_list(task->nsproxy->pop_ns);
 	//update_tick(task);
@@ -223,7 +225,10 @@ asmlinkage long sys_popcorn_det_start(void)
 
 asmlinkage long sys_popcorn_det_tick(void)
 {
-	atomic_inc(&current->ft_det_tick);
+	if(is_popcorn(current)) {
+		update_tick(current);
+		return 0;
+	}
 
 	return 0;
 }

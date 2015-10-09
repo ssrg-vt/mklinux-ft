@@ -2867,9 +2867,6 @@ try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 	p->sched_contributes_to_load = !!task_contributes_to_load(p);
 	p->state = TASK_WAKING;
 
-	if (is_popcorn(p))
-		det_wake_up(p);
-
 	if (p->sched_class->task_waking)
 		p->sched_class->task_waking(p);
 
@@ -2885,6 +2882,9 @@ stat:
 	ttwu_stat(p, cpu, wake_flags);
 out:
 	raw_spin_unlock_irqrestore(&p->pi_lock, flags);
+
+	if (is_popcorn(p))
+		det_wake_up(p);
 
 	return success;
 }
@@ -3074,10 +3074,6 @@ void wake_up_new_task(struct task_struct *p)
 #endif
 
 	p->ft_det_state = FT_DET_INACTIVE;
-	if (is_popcorn(p)) {
-		//rescue_token(p->nsproxy->pop_ns);
-		det_wake_up(p);
-	}
 
 	rq = __task_rq_lock(p);
 	activate_task(rq, p, 0);

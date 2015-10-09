@@ -95,24 +95,25 @@ static inline int set_token(struct popcorn_namespace *ns, struct task_struct *ta
 {
 	struct list_head *iter= NULL;
 	struct task_list *objPtr;
+	unsigned long flags;
 
-	spin_lock(&ns->task_list_lock);
+	spin_lock_irqsave(&ns->task_list_lock, flags);
 	list_for_each(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		if (objPtr->task == task) {
 			ns->token = objPtr;
-			spin_unlock(&ns->task_list_lock);
+			spin_unlock_irqrestore(&ns->task_list_lock, flags);
 			return 1;
 		}
 	}
-	spin_unlock(&ns->task_list_lock);
-	smp_mb();
+	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	return 0;
 }
 
 // Whenever a new thread is created, the task should go to ns
 static inline int add_task_to_ns(struct popcorn_namespace *ns, struct task_struct *task)
 {
+	unsigned long flags;
 	printk("Add %x, %d to ns\n", task, task->pid);
 	struct task_list *new_task = kmalloc(sizeof(struct task_list), GFP_KERNEL);
 	if (new_task == NULL)
@@ -120,10 +121,9 @@ static inline int add_task_to_ns(struct popcorn_namespace *ns, struct task_struc
 
 	atomic_set(&task->ft_det_tick, 0);
 	new_task->task = task;
-	spin_lock(&ns->task_list_lock);
+	spin_lock_irqsave(&ns->task_list_lock, flags);
 	list_add_tail(&new_task->task_list_member, &ns->ns_task_list.task_list_member);
-	spin_unlock(&ns->task_list_lock);
-	smp_mb();
+	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	return 0;
 }
 
@@ -133,19 +133,21 @@ static inline int remove_task_from_ns(struct popcorn_namespace *ns, struct task_
 	struct list_head *iter= NULL;
 	struct list_head *n;
 	struct task_list *objPtr;
-	spin_lock(&ns->task_list_lock);
+	unsigned long flags;
+
+	spin_lock_irqsave(&ns->task_list_lock, flags);
 	list_for_each_safe(iter, n, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		if (objPtr->task == task) {
 			list_del(iter);
 			kfree(iter);
 			update_token(ns);
-			spin_unlock(&ns->task_list_lock);
+			spin_unlock_irqrestore(&ns->task_list_lock, flags);
 			//dump_task_list(ns);
 			return 0;
 		}
 	}
-	spin_unlock(&ns->task_list_lock);
+	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 
 	return -1;
 }
@@ -180,20 +182,21 @@ static inline int update_token(struct popcorn_namespace *ns)
 
 static inline int update_tick(struct task_struct *task)
 {
+	unsigned long flags;
 	struct popcorn_namespace *ns;
 
 	ns = task->nsproxy->pop_ns;
 	smp_mb();
 	atomic_inc(&task->ft_det_tick);
 
-	spin_lock(&ns->task_list_lock);
+	spin_lock_irqsave(&ns->task_list_lock, flags);
 	if (ns->token == NULL) {
-		spin_unlock(&ns->task_list_lock);
+		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 		return 1;
 	}
 
 	update_token(ns);
-	spin_unlock(&ns->task_list_lock);
+	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	//dump_task_list(ns);
 
 	return 1;
@@ -201,32 +204,38 @@ static inline int update_tick(struct task_struct *task)
 
 static inline void det_wake_up(struct task_struct *task)
 {
+	unsigned long flags;
 	int tick;
 	struct popcorn_namespace *ns;
 
 	ns = task->nsproxy->pop_ns;
 
-	spin_lock(&ns->task_tick_lock);
-	printk("Waking up %d from %pS with tick %d\n", task->pid, __builtin_return_address(1), ns->last_tick);
-	dump_task_list(ns);
+	//printk("Waking up %d from %pS with tick %d\n", task->pid, __builtin_return_address(1), ns->last_tick);
+	//dump_task_list(ns);
 	smp_mb();
-	if (ns->last_tick >= atomic_read(&task->ft_det_tick))
+	spin_lock_irqsave(&ns->task_list_lock, flags);
+	if (ns->last_tick > atomic_read(&task->ft_det_tick))
 		atomic_set(&task->ft_det_tick, ns->last_tick);
-	spin_unlock(&ns->task_tick_lock);
+	update_token(ns);
+	spin_unlock_irqrestore(&ns->task_list_lock, flags);
+	if (task->ft_det_state == FT_DET_ACTIVE) {
+		__det_start(task);
+	}
 }
 
 static inline int have_token(struct task_struct *task)
 {
+	unsigned long flags;
 	struct popcorn_namespace *ns;
 
 	ns = task->nsproxy->pop_ns;
 
-	spin_lock(&ns->task_list_lock);
+	spin_lock_irqsave(&ns->task_list_lock, flags);
 	if (ns->token->task == task) {
-		spin_unlock(&ns->task_list_lock);
+		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 		return 1;
 	} else {
-		spin_unlock(&ns->task_list_lock);
+		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 		return 0;
 	}
 }

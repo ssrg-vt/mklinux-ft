@@ -9,6 +9,7 @@
 #include <linux/mm.h>
 #include <linux/wait.h>
 #include <linux/hash.h>
+#include <linux/popcorn_namespace.h>
 
 void __init_waitqueue_head(wait_queue_head_t *q, struct lock_class_key *key)
 {
@@ -106,6 +107,8 @@ void finish_wait(wait_queue_head_t *q, wait_queue_t *wait)
 	unsigned long flags;
 
 	__set_current_state(TASK_RUNNING);
+	if (is_popcorn(current))
+		det_wake_up(current);
 	/*
 	 * We can check for list emptiness outside the lock
 	 * IFF:
