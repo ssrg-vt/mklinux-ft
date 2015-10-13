@@ -136,6 +136,9 @@ struct tcp_init_param{
 	__u32 snt_synack;
 };
 
+struct stable_buffer;
+struct send_buffer;
+struct iovec;
 struct request_sock;
 /* struct used for networking filter on ft-popcorn.
  * 
@@ -177,7 +180,17 @@ struct net_filter_info{
 	volatile int primary_accept_id;
         int local_accept_id;
 	struct tcp_init_param tcp_param;
+
+	int discard_packet;
+	struct stable_buffer *stable_buffer;
+	struct send_buffer *send_buffer;
+	
+	u32 my_initial_out_seq;
+	u32 in_initial_seq;
+	u32 idelta_seq;
+	u32 odelta_seq;
 };
+
 void get_ft_filter(struct net_filter_info* filter);
 void put_ft_filter(struct net_filter_info* filter);
 char* print_filter_id(struct net_filter_info *filter);
@@ -206,15 +219,18 @@ struct msghdr;
 int ft_before_syscall_send_family(struct kiocb *iocb, struct socket *sock,
                                        struct msghdr *msg, size_t size, int* ret);
 int ft_after_syscall_send_family(int ret);
+int ft_before_syscall_rcv_family(struct kiocb *iocb, struct socket *sock,
+                                       struct msghdr *msg, size_t size, int flags, int* ret);
+int ft_after_syscall_rcv_family(struct kiocb *iocb, struct socket *sock,
+                                       struct msghdr *msg, size_t size, int flags, int ret);
+
+int remove_and_copy_from_stable_buffer(struct stable_buffer *stable_buffer, struct iovec* iov, int size);
+int insert_in_send_buffer_and_csum(struct send_buffer *send_buffer, struct iovec *iov, int iovlen, int size, __wsum *csum);
 
 #define DUMMY_DRIVER "ft_dummy_driver"
 
 struct tcp_request_sock;
 
-#define FT_TX_OK 0
-#define FT_TX_DROP 1
-int net_ft_tx_filter(struct sock* sk, struct sk_buff *skb);
-int net_ft_rx_filter(struct sk_buff *skb);
 int create_filter(struct task_struct *task, struct sock *sk, gfp_t priority);
 //int create_filter_accept(struct task_struct *task, struct socket *newsock,struct socket *sock);
 void ft_grown_mini_filter(struct sock* sk, struct request_sock *req);

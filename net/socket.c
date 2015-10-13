@@ -709,7 +709,10 @@ static inline int __sock_recvmsg_nosec(struct kiocb *iocb, struct socket *sock,
 				       struct msghdr *msg, size_t size, int flags)
 {
 	struct sock_iocb *si = kiocb_to_siocb(iocb);
-
+	int ret;
+#ifdef FT_POPCORN
+        int ft_ret;
+#endif
 	sock_update_classid(sock->sk);
 
 	si->sock = sock;
@@ -718,7 +721,19 @@ static inline int __sock_recvmsg_nosec(struct kiocb *iocb, struct socket *sock,
 	si->size = size;
 	si->flags = flags;
 
-	return sock->ops->recvmsg(iocb, sock, msg, size, flags);
+#ifdef FT_POPCORN
+        ft_ret= ft_before_syscall_rcv_family(iocb, sock, msg, size, flags, &ret);
+        if(ft_ret==FT_SYSCALL_DROP)
+                return ret;
+#endif
+	ret= sock->ops->recvmsg(iocb, sock, msg, size, flags);
+
+#ifdef FT_POPCORN
+        ft_after_syscall_rcv_family(iocb, sock, msg, size, flags, ret);
+#endif
+
+	return ret;
+
 }
 
 static inline int __sock_recvmsg(struct kiocb *iocb, struct socket *sock,
@@ -1076,12 +1091,6 @@ int sock_create_lite(int family, int type, int protocol, struct socket **res)
 	if (err)
 		goto out_release;
 
-/*#ifdef FT_POPCORN
-        err= create_filter(current, sock);
-        if (err)
-                goto out_release;
-#endif*/
-
 out:
 	*res = sock;
 	return err;
@@ -1290,12 +1299,6 @@ int __sock_create(struct net *net, int family, int type, int protocol,
 	err = security_socket_post_create(sock, family, type, protocol, kern);
 	if (err)
 		goto out_sock_release;
-
-/*#ifdef FT_POPCORN
-	err= create_filter(current, sock);
-	if (err)
-		goto out_sock_release;
-#endif*/
 
 	*res = sock;
 
@@ -1538,12 +1541,6 @@ SYSCALL_DEFINE4(accept4, int, fd, struct sockaddr __user *, upeer_sockaddr,
 	newsock->type = sock->type;
 	newsock->ops = sock->ops;
 
-/*#ifdef FT_POPCORN
-        err= create_filter_accept(current, newsock, sock);
-        if (err)
-                goto out_put;
-#endif
-*/
 	/*
 	 * We don't need try_module_get here, as the listening socket (sock)
 	 * has the protocol module (sock->ops->owner) held.
@@ -1576,12 +1573,6 @@ SYSCALL_DEFINE4(accept4, int, fd, struct sockaddr __user *, upeer_sockaddr,
 		if (err < 0)
 			goto out_fd;
 	}
-
-/*#ifdef FT_POPCORN
-        err= create_filter_accept(current, newsock, sock);
-        if (err)
-                goto out_fd;
-#endif*/
 
 	/* File flags are not inherited via accept() unlike another OSes. */
 
@@ -3314,12 +3305,6 @@ int kernel_accept(struct socket *sock, struct socket **newsock, int flags)
 			       newsock);
 	if (err < 0)
 		goto done;
-
-/*#ifdef FT_POPCORN
-        err= create_filter_accept(current, *newsock, sock);
-        if (err)
-                goto done;
-#endif*/
 
 	err = sock->ops->accept(sock, *newsock, flags);
 	if (err < 0) {
