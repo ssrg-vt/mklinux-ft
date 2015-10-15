@@ -11,6 +11,29 @@
 #include <linux/sched.h>
 #include <linux/pcn_kmsg.h>
 #include <linux/popcorn_namespace.h>
+#include <asm/unistd_64.h>
+
+/*
+ * Below lines are copied from DMP.
+ * Remeber to appericiate them if we make this thing working.
+ */
+/* MOT options */
+#define SPECIAL		(0)		/* comment that this syscall is handled specially */
+#define P		(0)
+#define S		(1<<0)		/* i.e. always serialize */
+#define FD		(1<<1)		/* fd must be first arg: uses fd */
+#define FILE_READ	(FD|(1<<2))	/* reads  data via fd */
+#define FILE_WRITE	(FD|(1<<3))	/* writes data via fd */
+#define FDTABLE		(1<<4)		/* modifies fd table */
+#define FSINFO_READ	(1<<5)		/* uses     fs info */
+#define FSINFO_WRITE	(1<<6)		/* modifies fs info */
+#define MM		(1<<7)
+/* sleep options */
+#define NOSLEEP		(1<<15)
+
+static uint16_t syscall_info_table[__NR_syscall_max] = {
+#include <linux/syscallinfo.h>
+};
 
 #define FT_CSYSC_VERBOSE 0
 #if FT_CSYSC_VERBOSE
@@ -580,7 +603,11 @@ static int handle_syscall_info_msg(struct pcn_kmsg_message* inc_msg){
 long syscall_hook_enter(struct pt_regs *regs)
 {
         // System call number is in orig_ax
-        if(ft_is_replicated(current)){
+        if(ft_is_replicated(current) && (
+                    regs->orig_ax != 318 &&
+                    regs->orig_ax != 319 &&
+                    regs->orig_ax != 320 &&
+                    regs->orig_ax != 202)) {
                 current->id_syscall++;
         }
         return regs->orig_ax;
@@ -589,7 +616,20 @@ long syscall_hook_enter(struct pt_regs *regs)
 void syscall_hook_exit(struct pt_regs *regs)
 {
         // System call number is in ax
-        if(ft_is_replicated(current)){
+        if(ft_is_replicated(current) && (
+                    regs->ax != 318 &&
+                    regs->ax != 319 &&
+                    regs->ax != 320)) {
+            // We just woke up from a sleeping syscall
+            if (!(syscall_info_table[regs->ax] & NOSLEEP)) {
+                // Deterministically wake up, basically futex
+                // TODO: too ugly
+                det_wake_up(current);
+                if (regs->ax != 202) {
+                    printk("Imma trying to wake %d up with %d\n", current->pid, regs->ax);
+	                dump_task_list(current->nsproxy->pop_ns);
+				}
+            }
         }
 }
 
