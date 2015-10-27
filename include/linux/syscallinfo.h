@@ -44,7 +44,7 @@
 [__NR_recvmsg]		= FILE_READ,
 
 [__NR_bind]		= FD,
-[__NR_listen]		= FD,
+[__NR_listen]		= NOSLEEP | FD,
 [__NR_getsockname]	= FD,
 [__NR_getpeername]	= FD,
 [__NR_socketpair]	= FDTABLE | S,
