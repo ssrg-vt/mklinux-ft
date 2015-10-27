@@ -11,6 +11,7 @@
 #include <linux/sched.h>
 #include <linux/pcn_kmsg.h>
 #include <linux/popcorn_namespace.h>
+#include <linux/ft_common_syscall_management.h>
 #include <asm/unistd_64.h>
 
 /*
@@ -46,13 +47,28 @@ typedef struct _list_entry{
         struct list_head list;
         char *string; //key
         void *obj; //pointer to the object to store
-}list_entry_t;
+} list_entry_t;
 
 typedef struct _hash_table{
         int size;
         spinlock_t spinlock; //used to lock the whole hash table when adding/removing/looking, not fine grain but effective!
         list_entry_t **table;
 }hash_table_t;
+
+static inline struct sleeping_syscall_request *alloc_syscall_req (struct task_struct *task, int det_process_count) {
+    struct sleeping_syscall_request *req;
+    req = (struct sleeping_syscall_request *) kmalloc(sizeof(struct sleeping_syscall_request) +
+                sizeof(uint64_t) * (det_process_count + 1), GFP_KERNEL);
+
+    if (!req)
+        return NULL;
+
+    req->header.type = PCN_KMSG_TYPE_FT_SYSCALL_WAKE_UP_INFO;
+    req->header.prio = PCN_KMSG_PRIO_NORMAL;
+    req->ft_pid = task->ft_pid;
+
+    return req;
+}
 
 /* Create an hash table with size @size.
  *
@@ -600,8 +616,111 @@ static int handle_syscall_info_msg(struct pcn_kmsg_message* inc_msg){
 
 }
 
+/*
+ * Upon receving the wake up info, the replica is supposed to queue the request in a FIFO.
+ * Whenever a system call is trying to wake up, it checks the queue to see if it has a pending
+ * syscall on the head of the queue, otherwise it waits until its turn.
+ *
+ * This is based on a fact that the replica always gets an event later than the primary.
+ */
+static int handle_syscall_wake_up_info_msg(struct pcn_kmsg_message* inc_msg)
+{
+    struct popcorn_namespace *ns = NULL;
+    struct sleeping_syscall_request *req;
+    struct task_struct *task;
+
+    /* The message will be freed by the dequeuer */
+    req = (struct sleeping_syscall_request*) inc_msg;
+    printk("Incoming message for synchronizing wake up %d\n", req->ft_pid.ft_pop_id.id);
+    for_each_process(task) {
+        if (task->ft_pid.ft_pop_id.kernel == req->ft_pid.ft_pop_id.kernel &&
+                task->ft_pid.ft_pop_id.id == req->ft_pid.ft_pop_id.id) {
+            ns = task->nsproxy->pop_ns;
+            break;
+        }
+    }
+    if (ns == NULL) {
+        printk("Now we have a problem, the process cannot be found.\n");
+        return 1;
+    }
+
+    enqueue_wake_up(&(ns->wake_up_buffer), req);
+
+    return 0;
+}
+
+/*
+ * Whenever a system call is waken up from sleeping, a message is sent to replicas.
+ * The sequence of syscalls should be serialized.
+ */
+int notify_syscall_wakeup(struct task_struct *task, int syscall_id)
+{
+    struct list_head *iter= NULL;
+    struct task_list *objPtr;
+    struct popcorn_namespace *ns;
+    struct sleeping_syscall_request *req;
+    int task_cnt = 0;
+
+    // Only primary gets to send this message
+    if (!is_popcorn(task) ||
+           !ft_is_primary_replica(task)) {
+        return 0;
+    }
+
+    ns = task->nsproxy->pop_ns;
+    req = alloc_syscall_req(task, ns->task_count);
+    if (!req)
+        return 0;
+
+    req->syscall_id = syscall_id;
+    req->det_process_count = ns->task_count;
+    printk("primary notifies wake up on %d of %d\n", task->current_syscall, task->pid);
+    spin_lock(&ns->task_list_lock);
+    list_for_each(iter, &ns->ns_task_list.task_list_member) {
+        objPtr = list_entry(iter, struct task_list, task_list_member);
+        smp_mb();
+        req->ticks[task_cnt] = atomic_read(&objPtr->task->ft_det_tick);
+        task_cnt++;
+    }
+    spin_unlock(&ns->task_list_lock);
+
+    send_to_all_secondary_replicas(task->ft_popcorn, (struct pcn_kmsg_long_message*) req, sizeof(*req));
+    kfree(req);
+
+    return 1;
+}
+
+void wait_for_wakeup(struct task_struct *task, int syscall_id)
+{
+    struct wake_up_buffer *buf;
+    struct sleeping_syscall_request *req;
+
+    if (!is_popcorn(task))
+        return 0;
+
+    // Only secondary gets to wait
+    if (ft_is_primary_replica(task))
+        return 0;
+
+    buf = &(task->nsproxy->pop_ns->wake_up_buffer);
+    for (;;) {
+        req = peek_wake_up(buf);
+        if (req != NULL &&
+                task->ft_pid.ft_pop_id.kernel == req->ft_pid.ft_pop_id.kernel &&
+                task->ft_pid.ft_pop_id.id == req->ft_pid.ft_pop_id.id) {
+            printk("secondary wakes up on %d of %d\n", task->current_syscall, task->pid);
+            break;
+        }
+        schedule();
+    }
+
+    dequeue_wake_up(buf);
+    pcn_kmsg_free_msg(req);
+}
+
 long syscall_hook_enter(struct pt_regs *regs)
 {
+        current->current_syscall = regs->orig_ax;
         // System call number is in orig_ax
         if(ft_is_replicated(current) && (
                     regs->orig_ax != 318 &&
@@ -625,17 +744,20 @@ void syscall_hook_exit(struct pt_regs *regs)
                 // Deterministically wake up, basically futex
                 // TODO: too ugly
                 det_wake_up(current);
+                // Skip futex
                 if (regs->ax != 202) {
                     printk("Imma trying to wake %d up with %d\n", current->pid, regs->ax);
 	                dump_task_list(current->nsproxy->pop_ns);
 				}
             }
         }
+        current->current_syscall = -1;
 }
 
 static int __init ft_syscall_common_management_init(void) {
 	ft_syscall_info_wq= create_singlethread_workqueue("ft_syscall_info_wq");
 	pcn_kmsg_register_callback(PCN_KMSG_TYPE_FT_SYSCALL_INFO, handle_syscall_info_msg);
+	pcn_kmsg_register_callback(PCN_KMSG_TYPE_FT_SYSCALL_WAKE_UP_INFO, handle_syscall_wake_up_info_msg);
         syscall_hash= create_hashtable(50);
         return 0;
 }

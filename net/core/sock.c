@@ -111,6 +111,8 @@
 #include <linux/init.h>
 #include <linux/highmem.h>
 #include <linux/user_namespace.h>
+#include <linux/popcorn_namespace.h>
+#include <linux/ft_common_syscall_management.h>
 
 #include <asm/uaccess.h>
 #include <asm/system.h>
@@ -1664,7 +1666,9 @@ int sk_wait_data(struct sock *sk, long *timeo)
 	set_bit(SOCK_ASYNC_WAITDATA, &sk->sk_socket->flags);
 	rc = sk_wait_event(sk, timeo, !skb_queue_empty(&sk->sk_receive_queue));
 	clear_bit(SOCK_ASYNC_WAITDATA, &sk->sk_socket->flags);
+	//wait_for_wakeup(current, __NR_read);
 	finish_wait(sk_sleep(sk), &wait);
+	//notify_syscall_wakeup(current, __NR_read);
 	return rc;
 }
 EXPORT_SYMBOL(sk_wait_data);

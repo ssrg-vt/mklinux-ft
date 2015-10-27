@@ -13,6 +13,7 @@
 #include <linux/kref.h>
 #include <linux/list.h>
 #include <linux/slab.h>
+#include <linux/ft_common_syscall_management.h>
 #include <asm/atomic.h>
 
 struct popcorn_namespace *get_popcorn_ns(struct popcorn_namespace *ns);
@@ -30,6 +31,7 @@ struct task_list {
 	struct task_struct *task;
 };
 
+
 struct popcorn_namespace
 {
 	struct kref kref;
@@ -43,6 +45,9 @@ struct popcorn_namespace
 	spinlock_t task_tick_lock;
 	struct task_list *token;
 	int last_tick;
+	int task_count;
+	/* The queue for storing wake up information from primary */
+	struct wake_up_buffer wake_up_buffer;
 };
 
 extern struct popcorn_namespace init_pop_ns;
@@ -80,6 +85,12 @@ static inline void init_task_list(struct popcorn_namespace *ns)
 	spin_lock_init(&ns->task_tick_lock);
 	ns->token = NULL;
 	ns->last_tick = 0;
+	ns->task_count = 0;
+	sema_init(&(ns->wake_up_buffer.queue_full), MAX_WAKE_UP_BUFFER);
+	sema_init(&(ns->wake_up_buffer.queue_empty), 0);
+	spin_lock_init(&(ns->wake_up_buffer.enqueue_lock));
+	spin_lock_init(&(ns->wake_up_buffer.dequeue_lock));
+	memset(&(ns->wake_up_buffer.wake_up_queue), 0, MAX_WAKE_UP_BUFFER * sizeof(struct sleeping_syscall_request *));
 }
 
 // Pass the token to the next task in this namespace
@@ -121,6 +132,7 @@ static inline int add_task_to_ns(struct popcorn_namespace *ns, struct task_struc
 
 	atomic_set(&task->ft_det_tick, 0);
 	new_task->task = task;
+	ns->task_count++;
 	spin_lock_irqsave(&ns->task_list_lock, flags);
 	list_add_tail(&new_task->task_list_member, &ns->ns_task_list.task_list_member);
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
@@ -143,6 +155,7 @@ static inline int remove_task_from_ns(struct popcorn_namespace *ns, struct task_
 			kfree(iter);
 			update_token(ns);
 			spin_unlock_irqrestore(&ns->task_list_lock, flags);
+			ns->task_count--;
 			//dump_task_list(ns);
 			return 0;
 		}
@@ -187,7 +200,6 @@ static inline int update_tick(struct task_struct *task)
 
 	ns = task->nsproxy->pop_ns;
 	smp_mb();
-	atomic_inc(&task->ft_det_tick);
 
 	spin_lock_irqsave(&ns->task_list_lock, flags);
 	if (ns->token == NULL) {
@@ -195,6 +207,7 @@ static inline int update_tick(struct task_struct *task)
 		return 1;
 	}
 
+	atomic_inc(&task->ft_det_tick);
 	update_token(ns);
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	//dump_task_list(ns);
