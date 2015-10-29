@@ -44,19 +44,53 @@ static long ft_gettimeofday_primary(struct timeval __user * tv, struct timezone 
         }
         if (unlikely(tz != NULL)) {
                 memcpy(&get_time->tz, &sys_tz, sizeof(struct timezone));
-                if (copy_to_user(tz, &get_time->tv, sizeof(struct timezone))){
+                if (copy_to_user(tz, &get_time->tz, sizeof(struct timezone))){
                         ret= -EFAULT;
                         goto out;
                 }
         }
 
-	ft_send_syscall_info_from_work(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) get_time, sizeof(*get_time));
-
+	if(is_there_any_secondary_replica(current->ft_popcorn)){
+		ft_send_syscall_info_from_work(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) get_time, sizeof(*get_time));
+	}
 out: 
 	if(get_time)
 		kfree(get_time);
 
 	return ret;
+
+}
+
+static long ft_gettimeofday_primary_after_secondary(struct timeval __user * tv, struct timezone __user * tz){
+        long ret= 0;
+	struct get_time_info *primary_info= NULL;
+
+        FTPRINTK("%s called from pid %d\n", __func__, current->pid);
+
+        primary_info= (struct get_time_info *)ft_get_pending_syscall_info(&current->ft_pid, current->id_syscall);
+
+        if(!primary_info){
+                return ft_gettimeofday_primary(tv, tz);
+        }
+
+	if (likely(tv != NULL)) {
+                if (copy_to_user(tv, (void*) &primary_info->tv, sizeof(struct timeval))){
+                        ret= -EFAULT;
+                        goto out;
+                }
+        }
+
+        if (unlikely(tz != NULL)) {
+                if (copy_to_user(tz, (void*) &primary_info->tz, sizeof(struct timezone))){
+                        ret= -EFAULT;
+                        goto out;
+                }
+        }
+
+out:
+        kfree(primary_info);
+
+        return 0;
 
 }
 
@@ -69,8 +103,7 @@ static long ft_gettimeofday_secondary(struct timeval __user * tv, struct timezon
 	primary_info= (struct get_time_info *)ft_wait_for_syscall_info( &current->ft_pid, current->id_syscall);
 
 	if(!primary_info){
-		printk("ERROR: %s no data returned from primary\n", __func__);
-		return -EFAULT;
+		return ft_gettimeofday_primary(tv, tz);
 	}
 
 	if (likely(tv != NULL)) {
@@ -94,21 +127,20 @@ out:
 }
 
 long ft_gettimeofday(struct timeval __user * tv, struct timezone __user * tz){
-	struct task_struct *ancestor;
-
-	ancestor= find_task_by_vpid(current->tgid);
-
-	if(ancestor->replica_type == PRIMARY_REPLICA || ancestor->replica_type == NEW_PRIMARY_REPLICA_DESCENDANT){
+	
+	if(ft_is_primary_replica(current)){
 		return ft_gettimeofday_primary(tv, tz);	
 	}
 	else{
-		if(ancestor->replica_type == SECONDARY_REPLICA || ancestor->replica_type == NEW_SECONDARY_REPLICA_DESCENDANT){
+		if(ft_is_secondary_replica(current)){
 			return ft_gettimeofday_secondary(tv, tz);
 		}
 		else{
-			//BUG();
-			printk("%s: ERROR ancestor pid %d tgid %d has replica type %d (current pid %d tgid %d)\n", __func__, ancestor->pid, ancestor->tgid, ancestor->replica_type, current->pid, current->tgid);
-			return -EFAULT;
+			if(ft_is_primary_after_secondary_replica(current)){
+				return ft_gettimeofday_primary_after_secondary(tv, tz);
+			}
+			else
+				return -EFAULT;
 		}
 
 	}

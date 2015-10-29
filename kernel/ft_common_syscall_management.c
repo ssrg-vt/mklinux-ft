@@ -343,10 +343,7 @@ struct wait_syscall{
 struct send_syscall_work{
         struct work_struct work;
         struct ft_pop_rep *replica_group; //to know secondary replicas to whom send the msg
-        /* ft_pid fields to id the replica*/
-        struct ft_pop_rep_id ft_pop_id;
-        int level;
-	int* id_array;
+	struct ft_pid sender; 
 	int syscall_id; //syscall id for that ft_pid replica
 	unsigned int private_data_size; //size of the private data of the syscall
 	char* private;
@@ -357,11 +354,13 @@ struct syscall_msg{
         /*the following is pid_t linearized*/
         struct ft_pop_rep_id ft_pop_id;
         int level;
-	//int* id_array; this is size variable so included in data field
+	int id_array[MAX_GENERATION_LENGTH]; 
+
         int syscall_id;
 	unsigned int syscall_info_size;
+	
 	/*this must be the last field of the struct*/
-        char data; /*contains id_array followed by syscall_info*/
+        char data; /*contains syscall_info*/
 };
 
 static int create_syscall_msg(struct ft_pop_rep_id* primary_ft_pop_id, int primary_level, int* primary_id_array, int syscall_id, char* syscall_info, unsigned int syscall_info_size, struct syscall_msg** message, int *msg_size){
@@ -370,7 +369,7 @@ static int create_syscall_msg(struct ft_pop_rep_id* primary_ft_pop_id, int prima
         int size;
 	char* variable_data;
 
-        size= sizeof(*msg) + primary_level*sizeof(int) + syscall_info_size;
+        size= sizeof(*msg) + syscall_info_size;
         msg= kmalloc(size, GFP_KERNEL);
         if(!msg)
                 return -ENOMEM;
@@ -381,14 +380,13 @@ static int create_syscall_msg(struct ft_pop_rep_id* primary_ft_pop_id, int prima
         msg->ft_pop_id= *primary_ft_pop_id;
         msg->level= primary_level;
 	
+	if(primary_level)
+		memcpy(msg->id_array, primary_id_array, primary_level*sizeof(int));
+
 	msg->syscall_id= syscall_id;
 	msg->syscall_info_size= syscall_info_size;
 
 	variable_data= &msg->data;
-	if(primary_level){
-		memcpy(variable_data, primary_id_array, primary_level*sizeof(int));
-		variable_data+= primary_level*sizeof(int);
-	}
 	
 	if(syscall_info_size){
 		memcpy(variable_data, syscall_info, syscall_info_size);
@@ -417,11 +415,10 @@ static void send_syscall_info_to_secondary_replicas(struct ft_pop_rep *replica_g
 static void send_syscall_info_to_secondary_replicas_from_work(struct work_struct* work){
         struct send_syscall_work *my_work= (struct send_syscall_work*) work;
 
-        send_syscall_info_to_secondary_replicas(my_work->replica_group, &my_work->ft_pop_id, my_work->level, (int*) &my_work->id_array, my_work->syscall_id, my_work->private, my_work->private_data_size);
+        send_syscall_info_to_secondary_replicas(my_work->replica_group, &my_work->sender.ft_pop_id, my_work->sender.level, my_work->sender.id_array, my_work->syscall_id, my_work->private, my_work->private_data_size);
 
         put_ft_pop_rep(my_work->replica_group);
 	
-	kfree(my_work->id_array);
 	kfree(my_work->private);
         kfree(my_work);
 
@@ -453,26 +450,13 @@ void ft_send_syscall_info_from_work(struct ft_pop_rep *replica_group, struct ft_
 	get_ft_pop_rep(replica_group);
 	work->replica_group= replica_group;
 
-	/* Do a copy of ft_pid because potentially it may exit on the mean while
-	 * and the pointer could not be valid anymore...
-	 */
-	work->ft_pop_id= primary_pid->ft_pop_id;
-	work->level= primary_pid->level;
-	if(primary_pid->level){
-		work->id_array= kmalloc(primary_pid->level*sizeof(int), GFP_KERNEL);
-		if(!work->id_array){
-			kfree(work);
-			return;
-		}
-                memcpy(work->id_array, primary_pid->id_array, primary_pid->level*sizeof(int));
-        }
+	work->sender= *primary_pid;
 	
 	/* Do a copy of syscall_info */
 	work->private_data_size= syscall_info_size;
 	if(syscall_info_size){
 		work->private= kmalloc(syscall_info_size, GFP_KERNEL);
 		if(!work->private){
-			kfree(work->id_array);
 			kfree(work);
 			return;
 		}
@@ -488,6 +472,32 @@ void ft_send_syscall_info_from_work(struct ft_pop_rep *replica_group, struct ft_
 
 	return;
 	
+}
+
+/* Supposed to be called by primary after secondary replicas to get syscall data sent by the primary replica before failing if any.
+ * The data returned is the one identified by the ft_pid of the replica and the syscall_id.
+ */
+void* ft_get_pending_syscall_info(struct ft_pid *pri_after_sec, int id_syscall){
+        struct wait_syscall* present_info= NULL;
+        char* key;
+        void* ret= NULL;
+         
+        FTPRINTK("%s called from pid %s\n", __func__, current->pid);
+        
+        key= ft_syscall_get_key_from_ft_pid(pri_after_sec, id_syscall);
+        if(!key)
+                return ERR_PTR(-ENOMEM);
+
+	present_info= ft_syscall_hash_remove(key);
+
+	if(present_info){
+		ret= present_info->private;
+		kfree(present_info);
+	}
+
+        kfree(key);
+	
+	return ret;
 }
 
 /* Supposed to be called by secondary replicas to wait for syscall data sent by the primary replica.
@@ -515,6 +525,7 @@ void* ft_wait_for_syscall_info(struct ft_pid *secondary, int id_syscall){
 
         wait_info->task= current;
         wait_info->populated= 0;
+	wait_info->private= NULL;
 
         if((present_info= ((struct wait_syscall*) ft_syscall_hash_add(key, (void*) wait_info)))){
 		FTPRINTK("%s data present, no need to wait\n", __func__);
@@ -557,25 +568,119 @@ out:
 
 }
 
+struct flush_pckt_work{
+        struct work_struct work;
+        atomic_t* counter;
+        struct task_struct *waiting;
+};
+
+static void notify_flush_received(struct work_struct* work){
+        struct flush_pckt_work *my_work= (struct flush_pckt_work *)work;
+
+        atomic_dec(my_work->counter);
+        wake_up_process(my_work->waiting);
+
+        kfree(my_work);
+}
+
+static int ft_wake_up_primary_after_secondary(void){
+	int ret= 0, i;
+	list_entry_t *head, *app;
+	struct wait_syscall* wait_info;
+
+	spin_lock(&syscall_hash->spinlock);
+        
+	for(i=0; i<syscall_hash->size; i++){
+		head= syscall_hash->table[i];
+		if(head){
+			list_for_each_entry(app, &head->list, list){
+				if(!app->obj){
+					ret= -EFAULT;
+					printk("ERROR: %s no obj field\n", __func__);
+					goto out;
+				}
+				wait_info= (struct wait_syscall*) app->obj;
+				if(ft_is_primary_after_secondary_replica(wait_info->task)){
+					wait_info->populated= 1;
+			                wake_up_process(wait_info->task);
+				}
+			}
+		}
+	}
+
+out:        
+	spin_unlock(&syscall_hash->spinlock);
+	return ret;
+	
+}
+
+static int flush_sys_wq(void){
+	struct flush_pckt_work *work;
+        atomic_t sys_wq_to_wait= ATOMIC_INIT(0);
+        int ret= 0, wake;
+
+        work= kmalloc(sizeof(*work), GFP_ATOMIC);
+        if(!work){
+                ret= -ENOMEM;
+                return ret;
+        }
+
+        INIT_WORK( (struct work_struct*)work, notify_flush_received);
+        work->counter= &sys_wq_to_wait;
+        work->waiting= current;
+        //NOTE this because it is a syngle thread wq
+        queue_work(ft_syscall_info_wq, (struct work_struct*)work);
+
+        atomic_inc(&sys_wq_to_wait);
+
+        wake= 0;
+        while(atomic_read(&sys_wq_to_wait)!=0){
+                local_irq_disable();
+                preempt_disable();
+
+                __set_current_state(TASK_INTERRUPTIBLE);
+                if(atomic_read(&sys_wq_to_wait)==0)
+                        wake= 1;
+
+                preempt_enable();
+                local_irq_enable();
+
+                if(!wake)
+                        schedule();
+
+        }
+
+	return ret;
+}
+
+/* Flush any pending syscall info still to be consumed by worker thread
+ * and wake up all primary_after_secondary replicas that are waiting for a syscall info.
+ * NOTE: this is supposed to be called after update_replica_type_after_failure.
+ */
+int flush_syscall_info(void){
+	int ret;
+
+	ret= flush_sys_wq();
+	if(ret)
+		return ret;
+
+	ret= ft_wake_up_primary_after_secondary();
+
+	return ret;
+}
+
 static int handle_syscall_info_msg(struct pcn_kmsg_message* inc_msg){
         struct syscall_msg* msg = (struct syscall_msg*) inc_msg;
         struct wait_syscall* wait_info;
         struct wait_syscall* present_info= NULL;
         char* key;
-	int* id_array;
 	char* private;
 
-	/* retrive variable data length fields (id_array and syscall_info)*/
-	id_array= (int*) &msg->data;
-	if(msg->level){
-		private= &msg->data+ msg->level*sizeof(int);
-	}	
-	else{
-		private= &msg->data;
-	}
+	/* retrive variable data length field (syscall_info)*/
+	private= &msg->data;
 
 	/* retrive key for this syscall in hash_table*/
-        key= ft_syscall_get_key(&msg->ft_pop_id, msg->level, id_array, msg->syscall_id);
+        key= ft_syscall_get_key(&msg->ft_pop_id, msg->level, msg->id_array, msg->syscall_id);
         if(!key)
                 return -ENOMEM;
 
@@ -600,7 +705,7 @@ static int handle_syscall_info_msg(struct pcn_kmsg_message* inc_msg){
 		wait_info->private= NULL;
 
         wait_info->task= NULL;
-        wait_info->populated=1;
+        wait_info->populated= 1;
 
         if((present_info= ((struct wait_syscall*) ft_syscall_hash_add(key, (void*) wait_info)))){
                 present_info->private= wait_info->private;
@@ -723,10 +828,10 @@ long syscall_hook_enter(struct pt_regs *regs)
         current->current_syscall = regs->orig_ax;
         // System call number is in orig_ax
         if(ft_is_replicated(current) && (
-                    regs->orig_ax != 318 &&
-                    regs->orig_ax != 319 &&
-                    regs->orig_ax != 320 &&
-                    regs->orig_ax != 202)) {
+                    regs->orig_ax != __NR_popcorn_det_start &&
+                    regs->orig_ax != __NR_popcorn_det_end &&
+                    regs->orig_ax != __NR_popcorn_det_tick &&
+                    regs->orig_ax != __NR_futex)) {
                 current->id_syscall++;
         }
         return regs->orig_ax;
@@ -736,16 +841,16 @@ void syscall_hook_exit(struct pt_regs *regs)
 {
         // System call number is in ax
         if(ft_is_replicated(current) && (
-                    regs->ax != 318 &&
-                    regs->ax != 319 &&
-                    regs->ax != 320)) {
+                    regs->ax != __NR_popcorn_det_start &&
+                    regs->ax != __NR_popcorn_det_end &&
+                    regs->ax != __NR_popcorn_det_tick)) {
             // We just woke up from a sleeping syscall
             if (!(syscall_info_table[regs->ax] & NOSLEEP)) {
                 // Deterministically wake up, basically futex
                 // TODO: too ugly
                 det_wake_up(current);
                 // Skip futex
-                if (regs->ax != 202) {
+                if (regs->ax != __NR_futex) {
                     printk("Imma trying to wake %d up with %d\n", current->pid, regs->ax);
 	                dump_task_list(current->nsproxy->pop_ns);
 				}

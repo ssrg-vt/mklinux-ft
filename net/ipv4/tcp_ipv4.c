@@ -1349,14 +1349,7 @@ int tcp_v4_conn_request(struct sock *sk, struct sk_buff *skb)
 	if (want_cookie && !tmp_opt.saw_tstamp)
 		tcp_clear_options(&tmp_opt);
 
-//#ifdef FT_POPCORN
-//	if(req->ft_filter)
-//		tmp_opt.tstamp_ok = 0;
-//	else
-//		tmp_opt.tstamp_ok = tmp_opt.saw_tstamp;
-//#else
 	tmp_opt.tstamp_ok = tmp_opt.saw_tstamp;
-//#endif
 	tcp_openreq_init(req, &tmp_opt, skb);
 
 	ireq = inet_rsk(req);
@@ -1557,6 +1550,7 @@ static struct sock *tcp_v4_hnd_req(struct sock *sk, struct sk_buff *skb)
 	const struct iphdr *iph = ip_hdr(skb);
 	struct sock *nsk;
 	struct request_sock **prev;
+	
 	/* Find possible connection requests. */
 	struct request_sock *req = inet_csk_search_req(sk, &prev, th->source,
 						       iph->saddr, iph->daddr);
@@ -1587,6 +1581,7 @@ static __sum16 tcp_v4_checksum_init(struct sk_buff *skb)
 	const struct iphdr *iph = ip_hdr(skb);
 
 	if (skb->ip_summed == CHECKSUM_COMPLETE) {
+
 		if (!tcp_v4_check(skb->len, iph->saddr,
 				  iph->daddr, skb->csum)) {
 			skb->ip_summed = CHECKSUM_UNNECESSARY;
@@ -1598,6 +1593,7 @@ static __sum16 tcp_v4_checksum_init(struct sk_buff *skb)
 				       skb->len, IPPROTO_TCP, 0);
 
 	if (skb->len <= 76) {
+
 		return __skb_checksum_complete(skb);
 	}
 	return 0;
@@ -1639,6 +1635,7 @@ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 		goto csum_err;
 
 	if (sk->sk_state == TCP_LISTEN) {
+
 		struct sock *nsk = tcp_v4_hnd_req(sk, skb);
 		if (!nsk)
 			goto discard;
@@ -1708,6 +1705,7 @@ int tcp_v4_rcv(struct sk_buff *skb)
 
 	if (th->doff < sizeof(struct tcphdr) / 4)
 		goto bad_packet;
+
 	if (!pskb_may_pull(skb, th->doff * 4))
 		goto discard_it;
 

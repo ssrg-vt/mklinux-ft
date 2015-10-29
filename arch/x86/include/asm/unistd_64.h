@@ -698,11 +698,13 @@ __SYSCALL(__NR_popcorn_test_ipi_latency, sys_popcorn_test_ipi_latency)
 __SYSCALL(__NR_popcorn_perf_start, sys_popcorn_perf_start)
 #define __NR_popcorn_perf_end       317
 __SYSCALL(__NR_popcorn_perf_end, sys_popcorn_perf_end)
-#define __NR_popcorn_det_start       318
+#define __NR_ft_crash_kernel			318
+__SYSCALL(__NR_ft_crash_kernel, sys_ft_crash_kernel)
+#define __NR_popcorn_det_start       319
 __SYSCALL(__NR_popcorn_det_start, sys_popcorn_det_start)
-#define __NR_popcorn_det_end       319
+#define __NR_popcorn_det_end       320
 __SYSCALL(__NR_popcorn_det_end, sys_popcorn_det_end)
-#define __NR_popcorn_det_tick       320
+#define __NR_popcorn_det_tick       321
 __SYSCALL(__NR_popcorn_det_tick, sys_popcorn_det_tick)
 
 #ifndef __NO_STUBS
