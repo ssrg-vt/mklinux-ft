@@ -52,8 +52,8 @@ static struct popcorn_namespace *create_popcorn_namespace(struct popcorn_namespa
 
 	kref_init(&ns->kref);
 	init_task_list(ns);
-	add_task_to_ns(ns, current);
-	set_token(ns, current);
+	//add_task_to_ns(ns, current);
+	//set_token(ns, current);
 
         return ns;
 
@@ -208,9 +208,11 @@ long __det_start(struct task_struct *task)
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	while (!have_token(task)) {
 		schedule();
-		spin_lock_irqsave(&ns->task_list_lock, flags);
-		update_token(ns);
-		spin_unlock_irqrestore(&ns->task_list_lock, flags);
+		/*
+		 *spin_lock_irqsave(&ns->task_list_lock, flags);
+		 *update_token(ns);
+		 *spin_unlock_irqrestore(&ns->task_list_lock, flags);
+		 */
 	}
 	//dump_task_list(task->nsproxy->pop_ns);
 	//update_tick(task);

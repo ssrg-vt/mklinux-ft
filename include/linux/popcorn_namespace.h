@@ -154,8 +154,8 @@ static inline int remove_task_from_ns(struct popcorn_namespace *ns, struct task_
 			list_del(iter);
 			kfree(iter);
 			update_token(ns);
-			spin_unlock_irqrestore(&ns->task_list_lock, flags);
 			ns->task_count--;
+			spin_unlock_irqrestore(&ns->task_list_lock, flags);
 			//dump_task_list(ns);
 			return 0;
 		}
@@ -177,14 +177,16 @@ static inline int update_token(struct popcorn_namespace *ns)
 	list_for_each(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		tick_value = atomic_read(&objPtr->task->ft_det_tick);
-		if (min_value >= tick_value &&
-				(objPtr->task->state == TASK_RUNNING ||
-				 objPtr->task->state == TASK_WAKING)) {
-			new_token = objPtr;
-			min_value = tick_value;
+		if (min_value >= tick_value) {
+			if(!(objPtr->task->state == TASK_RUNNING ||
+				 objPtr->task->state == TASK_WAKING) &&
+				objPtr->task->current_syscall == 202) {
+			} else {
+				new_token = objPtr;
+				min_value = tick_value;
+			}
 		}
 	}
-	//printk("Token updated to %d(%d)\n", objPtr->task->pid, tick_value);
 	ns->token = new_token;
 	if (ns->token != NULL &&
 			ns->token->task != NULL)
@@ -210,7 +212,7 @@ static inline int update_tick(struct task_struct *task)
 	atomic_inc(&task->ft_det_tick);
 	update_token(ns);
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
-	//dump_task_list(ns);
+	dump_task_list(ns);
 
 	return 1;
 }
@@ -232,8 +234,8 @@ static inline void det_wake_up(struct task_struct *task)
 	} else {
 		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	}
-//	printk("Waking up %d from %pS with tick %d\n", task->pid, __builtin_return_address(1), task->ft_det_tick);
-//	dump_task_list(ns);
+	//printk("Waking up %d from %pS with tick %d\n", task->pid, __builtin_return_address(1), task->ft_det_tick);
+	dump_task_list(ns);
 }
 
 static inline int have_token(struct task_struct *task)
@@ -248,7 +250,7 @@ static inline int have_token(struct task_struct *task)
 		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 		return 1;
 	} else {
-		update_token(ns);
+//		update_token(ns);
 		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 		return 0;
 	}

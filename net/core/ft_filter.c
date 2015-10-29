@@ -167,7 +167,7 @@ extern int _cpu;
 struct net_filter_info filter_list_head;
 DEFINE_SPINLOCK(filter_list_lock);
 
-#define MAX_WQ_POOL	50
+#define MAX_WQ_POOL	100
 #define THRESHOLD_WQ_POOL	(MAX_WQ_POOL/2)
 struct stack wq_stack;
 
