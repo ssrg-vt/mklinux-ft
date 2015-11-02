@@ -20,7 +20,7 @@ struct popcorn_namespace *get_popcorn_ns(struct popcorn_namespace *ns);
 struct popcorn_namespace *copy_pop_ns(unsigned long flags, struct popcorn_namespace *ns);
 void free_popcorn_ns(struct kref *kref);
 void put_pop_ns(struct popcorn_namespace *ns);
-int associate_to_popcorn_ns(struct task_struct * tsk, int replication_degree);
+int associate_to_popcorn_ns(struct task_struct * tsk, int replication_degree, int type);
 int is_popcorn_namespace_active(struct popcorn_namespace* ns);
 static inline int update_token(struct popcorn_namespace *ns);
 long __det_start(struct task_struct *task);
@@ -178,10 +178,8 @@ static inline int update_token(struct popcorn_namespace *ns)
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		tick_value = atomic_read(&objPtr->task->ft_det_tick);
 		if (min_value >= tick_value) {
-			if(!(objPtr->task->state == TASK_RUNNING ||
-				 objPtr->task->state == TASK_WAKING) &&
-				objPtr->task->current_syscall == 202) {
-			} else {
+			if((objPtr->task->state == TASK_RUNNING ||
+				 objPtr->task->state == TASK_WAKING)) {
 				new_token = objPtr;
 				min_value = tick_value;
 			}
@@ -197,23 +195,8 @@ static inline int update_token(struct popcorn_namespace *ns)
 
 static inline int update_tick(struct task_struct *task)
 {
-	unsigned long flags;
-	struct popcorn_namespace *ns;
-
-	ns = task->nsproxy->pop_ns;
-	smp_mb();
-
-	spin_lock_irqsave(&ns->task_list_lock, flags);
-	if (ns->token == NULL) {
-		spin_unlock_irqrestore(&ns->task_list_lock, flags);
-		return 1;
-	}
-
 	atomic_inc(&task->ft_det_tick);
-	update_token(ns);
-	spin_unlock_irqrestore(&ns->task_list_lock, flags);
-	dump_task_list(ns);
-
+	//dump_task_list(ns);
 	return 1;
 }
 
@@ -234,8 +217,12 @@ static inline void det_wake_up(struct task_struct *task)
 	} else {
 		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	}
+
+	if (task->ft_det_state == FT_DET_ACTIVE) {
+		__det_start(task);
+	}
 	//printk("Waking up %d from %pS with tick %d\n", task->pid, __builtin_return_address(1), task->ft_det_tick);
-	dump_task_list(ns);
+	//dump_task_list(ns);
 }
 
 static inline int have_token(struct task_struct *task)
