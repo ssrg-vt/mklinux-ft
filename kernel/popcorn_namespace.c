@@ -196,27 +196,22 @@ long __det_start(struct task_struct *task)
 {
 	struct popcorn_namespace *ns;
 	unsigned long flags;
+	int i;
 
 	if(!is_popcorn(task)) {
 		return 0;
 	}
 
-	ns = task->nsproxy->pop_ns;
-	task->ft_det_state = FT_DET_ACTIVE;
-	smp_mb();
-	spin_lock_irqsave(&ns->task_list_lock, flags);
-	update_token(ns);
-	spin_unlock_irqrestore(&ns->task_list_lock, flags);
-	while (!have_token(task)) {
+	for (;;) {
+		task->ft_det_state = FT_DET_WAIT_TOKEN;
+		set_task_state(task, TASK_INTERRUPTIBLE);
+		if (have_token(task)) {
+			break;
+		}
 		schedule();
-		/*
-		 *spin_lock_irqsave(&ns->task_list_lock, flags);
-		 *update_token(ns);
-		 *spin_unlock_irqrestore(&ns->task_list_lock, flags);
-		 */
 	}
-	//dump_task_list(task->nsproxy->pop_ns);
-	//update_tick(task);
+	task->ft_det_state = FT_DET_ACTIVE;
+	set_task_state(task, TASK_RUNNING);
 
 	return 1;
 }
@@ -228,8 +223,12 @@ asmlinkage long sys_popcorn_det_start(void)
 
 asmlinkage long sys_popcorn_det_tick(void)
 {
+	struct popcorn_namespace *ns;
+
 	if(is_popcorn(current)) {
 		update_tick(current);
+		ns = current->nsproxy->pop_ns;
+		dump_task_list(ns);
 		return 0;
 	}
 
@@ -239,6 +238,7 @@ asmlinkage long sys_popcorn_det_tick(void)
 long __det_end(struct task_struct *task)
 {
 	struct popcorn_namespace *ns;
+	unsigned long flags;
 
 	if(!is_popcorn(task)) {
 		return 0;
@@ -248,7 +248,6 @@ long __det_end(struct task_struct *task)
 
 	task->ft_det_state = FT_DET_INACTIVE;
 	update_tick(task);
-	smp_mb();
 	//dump_task_list(ns);
 
 	return 1;

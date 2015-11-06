@@ -16,6 +16,10 @@
 #include <linux/ft_common_syscall_management.h>
 #include <asm/atomic.h>
 
+// If AGGRESSIVE_DET is enabled, for all the blocking system calls,
+// only Futex will be skipped
+#define AGGRESSIVE_DET 0
+
 struct popcorn_namespace *get_popcorn_ns(struct popcorn_namespace *ns);
 struct popcorn_namespace *copy_pop_ns(unsigned long flags, struct popcorn_namespace *ns);
 void free_popcorn_ns(struct kref *kref);
@@ -59,7 +63,6 @@ static inline void dump_task_list(struct popcorn_namespace *ns)
 	spin_lock(&ns->task_list_lock);
 	list_for_each(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
-		smp_mb();
 		if (ns->token != NULL && objPtr->task == ns->token->task)
 			printk("%d(%d)[%d][%d][o] -> ", objPtr->task->pid, atomic_read(&objPtr->task->ft_det_tick), objPtr->task->state, objPtr->task->ft_det_state);
 		else
@@ -98,7 +101,6 @@ static inline void pass_token(struct popcorn_namespace *ns)
 {
 	do {
 		ns->token = container_of(ns->token->task_list_member.next, struct task_list, task_list_member);
-		smp_mb();
 	} while (ns->token == NULL || ns->token->task == NULL);
 }
 
@@ -178,8 +180,17 @@ static inline int update_token(struct popcorn_namespace *ns)
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		tick_value = atomic_read(&objPtr->task->ft_det_tick);
 		if (min_value >= tick_value) {
-			if((objPtr->task->state == TASK_RUNNING ||
-				 objPtr->task->state == TASK_WAKING)) {
+#ifdef AGGRESSIVE_DET 
+			if(!(objPtr->task->state == TASK_RUNNING ||
+				 objPtr->task->state == TASK_WAKING ||
+				 objPtr->task->ft_det_state == FT_DET_WAIT_TOKEN) &&
+					objPtr->task->current_syscall == 202) { // Skip futex
+			} else {
+#else
+			if(objPtr->task->state == TASK_RUNNING ||
+				 objPtr->task->state == TASK_WAKING ||
+				 objPtr->task->ft_det_state == FT_DET_WAIT_TOKEN) {
+#endif
 				new_token = objPtr;
 				min_value = tick_value;
 			}
@@ -187,16 +198,27 @@ static inline int update_token(struct popcorn_namespace *ns)
 	}
 	ns->token = new_token;
 	if (ns->token != NULL &&
-			ns->token->task != NULL)
+			ns->token->task != NULL) {
 		ns->last_tick = atomic_read(&ns->token->task->ft_det_tick);
-	smp_mb();
+		if (ns->token->task->state == TASK_INTERRUPTIBLE) {
+			wake_up_process(ns->token->task);
+		}
+	}
 	return 0;
 }
 
 static inline int update_tick(struct task_struct *task)
 {
-	atomic_inc(&task->ft_det_tick);
+	unsigned long flags;
+	struct popcorn_namespace *ns;
+
+	ns = task->nsproxy->pop_ns;
+
 	//dump_task_list(ns);
+	atomic_inc(&task->ft_det_tick);
+	spin_lock_irqsave(&ns->task_list_lock, flags);
+	update_token(ns);
+	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	return 1;
 }
 
@@ -208,7 +230,6 @@ static inline void det_wake_up(struct task_struct *task)
 
 	ns = task->nsproxy->pop_ns;
 
-	smp_mb();
 	spin_lock_irqsave(&ns->task_list_lock, flags);
 	if (ns->last_tick > atomic_read(&task->ft_det_tick)) {
 		atomic_set(&task->ft_det_tick, ns->last_tick);

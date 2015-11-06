@@ -200,7 +200,8 @@ print_cfs_rq(struct seq_file *m, int cpu, struct cfs_rq *cfs_rq)
  */
 #define FT_DET_CREATED 0
 #define FT_DET_INACTIVE 1
-#define FT_DET_ACTIVE 2
+#define FT_DET_WAIT_TOKEN 2
+#define FT_DET_ACTIVE 3
 
 #define TASK_STATE_TO_CHAR_STR "RSDTtZXxKW"
 
