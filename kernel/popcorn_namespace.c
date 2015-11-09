@@ -221,12 +221,12 @@ asmlinkage long sys_popcorn_det_start(void)
 	__det_start(current);
 }
 
-asmlinkage long sys_popcorn_det_tick(void)
+asmlinkage long sys_popcorn_det_tick(long tick)
 {
 	struct popcorn_namespace *ns;
 
 	if(is_popcorn(current)) {
-		update_tick(current);
+		update_tick(current, tick);
 		ns = current->nsproxy->pop_ns;
 		dump_task_list(ns);
 		return 0;
@@ -247,7 +247,7 @@ long __det_end(struct task_struct *task)
 	ns = task->nsproxy->pop_ns;
 
 	task->ft_det_state = FT_DET_INACTIVE;
-	update_tick(task);
+	update_tick(task, 1);
 	//dump_task_list(ns);
 
 	return 1;

@@ -207,7 +207,7 @@ static inline int update_token(struct popcorn_namespace *ns)
 	return 0;
 }
 
-static inline int update_tick(struct task_struct *task)
+static inline int update_tick(struct task_struct *task, long tick)
 {
 	unsigned long flags;
 	struct popcorn_namespace *ns;
@@ -215,7 +215,7 @@ static inline int update_tick(struct task_struct *task)
 	ns = task->nsproxy->pop_ns;
 
 	//dump_task_list(ns);
-	atomic_inc(&task->ft_det_tick);
+	atomic_add(&task->ft_det_tick, tick);
 	spin_lock_irqsave(&ns->task_list_lock, flags);
 	update_token(ns);
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
