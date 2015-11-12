@@ -26,6 +26,7 @@
 #include <linux/file.h>
 #include <linux/syscalls.h>
 #include <linux/popcorn_namespace.h>
+#include <linux/ft_uts.h>
 
 static struct kmem_cache *nsproxy_cachep;
 
@@ -283,6 +284,9 @@ SYSCALL_DEFINE2(setns, int, fd, int, nstype)
 		goto out;
 	}
 	switch_task_namespaces(tsk, new_nsproxy);
+
+	// Sync the other side with the initial state
+	sync_uts(tsk);
 out:
 	fput(file);
 	return err;

@@ -59,6 +59,7 @@
 #include <linux/magic.h>
 #include <linux/pid.h>
 #include <linux/nsproxy.h>
+#include <linux/popcorn_namespace.h>
 
 #include <asm/futex.h>
 
@@ -1758,6 +1759,7 @@ out:
 static void futex_wait_queue_me(struct futex_hash_bucket *hb, struct futex_q *q,
 				struct hrtimer_sleeper *timeout)
 {
+	struct popcorn_namespace *ns = NULL;
 	/*
 	 * The task state is guaranteed to be set before another task can
 	 * wake it. set_current_state() is implemented using set_mb() and
@@ -1765,6 +1767,15 @@ static void futex_wait_queue_me(struct futex_hash_bucket *hb, struct futex_q *q,
 	 * access to the hash list and forcing another memory barrier.
 	 */
 	set_current_state(TASK_INTERRUPTIBLE);
+
+	if (is_popcorn(current)) {
+		ns = current->nsproxy->pop_ns;
+		smp_mb();
+		spin_lock(&ns->task_list_lock);
+		update_token(ns);
+		spin_unlock(&ns->task_list_lock);
+	}
+
 	queue_me(q, hb);
 
 	/* Arm the timer */
@@ -2630,6 +2641,7 @@ long do_futex(u32 __user *uaddr, int op, u32 val, ktime_t *timeout,
 {
 	int ret = -ENOSYS, cmd = op & FUTEX_CMD_MASK;
 	unsigned int flags = 0;
+	struct popcorn_namespace *ns = NULL;
 
 	if (!(op & FUTEX_PRIVATE_FLAG))
 		flags |= FLAGS_SHARED;
@@ -2655,6 +2667,9 @@ long do_futex(u32 __user *uaddr, int op, u32 val, ktime_t *timeout,
 		val3 = FUTEX_BITSET_MATCH_ANY;
 	case FUTEX_WAIT_BITSET:
 		ret = futex_wait(uaddr, flags, val, timeout, val3);
+		if (is_popcorn(current)) {
+			det_wake_up(current);
+		}
 		break;
 	case FUTEX_WAKE:
 		val3 = FUTEX_BITSET_MATCH_ANY;
@@ -2690,6 +2705,7 @@ long do_futex(u32 __user *uaddr, int op, u32 val, ktime_t *timeout,
 	default:
 		ret = -ENOSYS;
 	}
+
 	return ret;
 }
 

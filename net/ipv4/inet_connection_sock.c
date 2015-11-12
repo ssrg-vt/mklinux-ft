@@ -23,6 +23,8 @@
 #include <net/route.h>
 #include <net/tcp_states.h>
 #include <net/xfrm.h>
+#include <linux/popcorn_namespace.h>
+#include <linux/ft_common_syscall_management.h>
 
 #ifdef INET_CSK_DEBUG
 const char inet_csk_timer_bug_msg[] = "inet_csk BUG: unknown timer value\n";
@@ -256,7 +258,19 @@ static int inet_csk_wait_for_connect(struct sock *sk, long timeo)
 		if (!timeo)
 			break;
 	}
+
+	/*
+	 * FT replication: a replica holds on until it gets notification from
+	 * the primary.
+	 */
+	//wait_for_wakeup(current, __NR_accept4);
+
 	finish_wait(sk_sleep(sk), &wait);
+
+	/*
+	 * Primary notifies the replicas that it wakes up from sleeping.
+	 */
+	//notify_syscall_wakeup(current, __NR_accept4);
 	return err;
 }
 
@@ -288,6 +302,7 @@ struct sock *inet_csk_accept(struct sock *sk, int flags, int *err)
 			goto out_err;
 
 		error = inet_csk_wait_for_connect(sk, timeo);
+
 		if (error)
 			goto out_err;
 	}

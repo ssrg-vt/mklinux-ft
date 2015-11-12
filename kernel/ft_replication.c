@@ -1102,6 +1102,9 @@ static int exec_to_secondary_replica(void *data){
 	copy_env[nr_pointers]= NULL;
 
 	FTPRINTK("%s: pid %d going to execve to %s for beeing a replica of pid %d in kernel %d\n",__func__, current->pid, exe_pathp, msg->primary_replica.pid, msg->primary_replica.kernel);
+	current->ft_det_state = FT_DET_INACTIVE;
+	add_task_to_ns(current->nsproxy->pop_ns, current);
+
 
 	retval = kernel_execve(exe_pathp,
                                (const char *const *)copy_argv,

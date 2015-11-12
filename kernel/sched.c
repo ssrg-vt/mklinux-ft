@@ -76,6 +76,7 @@
 #ifdef SUPPORT_FOR_CLUSTERING
 #include <linux/popcorn.h>
 #endif
+#include <linux/popcorn_namespace.h>
 
 #include <asm/tlb.h>
 #include <asm/irq_regs.h>
@@ -3069,6 +3070,8 @@ void wake_up_new_task(struct task_struct *p)
 	set_task_cpu(p, select_task_rq(p, SD_BALANCE_FORK, 0));
 #endif
 
+	p->ft_det_state = FT_DET_INACTIVE;
+
 	rq = __task_rq_lock(p);
 	activate_task(rq, p, 0);
 	p->on_rq = 1;
@@ -4411,6 +4414,8 @@ static void __sched __schedule(void)
 	unsigned long *switch_count;
 	struct rq *rq;
 	int cpu;
+	struct pid_list *token;
+	unsigned long flags;
 
 need_resched:
 	preempt_disable();
@@ -4480,6 +4485,7 @@ need_resched:
 	post_schedule(rq);
 
 	preempt_enable_no_resched();
+
 	if (need_resched())
 		goto need_resched;
 }

@@ -195,6 +195,14 @@ print_cfs_rq(struct seq_file *m, int cpu, struct cfs_rq *cfs_rq)
 #define TASK_WAKING		256
 #define TASK_STATE_MAX		512
 
+/*
+ * Task states for FT deterministic execution
+ */
+#define FT_DET_CREATED 0
+#define FT_DET_INACTIVE 1
+#define FT_DET_WAIT_TOKEN 2
+#define FT_DET_ACTIVE 3
+
 #define TASK_STATE_TO_CHAR_STR "RSDTtZXxKW"
 
 extern char ___assert_task_state[1 - 2*!!(
@@ -1612,6 +1620,9 @@ struct task_struct {
 	void *useful;
 	
 	struct ft_pop_rep *ft_popcorn;
+	int ft_det_state;
+	atomic_t ft_det_tick;
+	long current_syscall;
 #endif
 };
 

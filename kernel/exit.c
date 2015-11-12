@@ -53,6 +53,7 @@
 #include <linux/oom.h>
 
 #include <linux/process_server.h>
+#include <linux/popcorn_namespace.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -947,6 +948,11 @@ NORET_TYPE void do_exit(long code)
      * Multikernel
      */
     process_server_do_exit();
+
+	if (is_popcorn(tsk)) {
+		printk("remove %d form ns\n", tsk->pid);
+		remove_task_from_ns(tsk->nsproxy->pop_ns, tsk);
+	}
 
 
 	/*

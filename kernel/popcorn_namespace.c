@@ -14,6 +14,8 @@
 #include <linux/popcorn_namespace.h>
 #include <linux/spinlock.h>
 #include <linux/ft_replication.h>
+#include <linux/sched.h>
+#include <asm/atomic.h>
 
 static struct kmem_cache *popcorn_ns_cachep;
 struct proc_dir_entry *res;
@@ -49,6 +51,9 @@ static struct popcorn_namespace *create_popcorn_namespace(struct popcorn_namespa
 		goto out;
 
 	kref_init(&ns->kref);
+	init_task_list(ns);
+	//add_task_to_ns(ns, current);
+	//set_token(ns, current);
 
         return ns;
 
@@ -185,6 +190,72 @@ int write_notify_popcorn_ns(struct file *file, const char __user *buffer, unsign
 	}
 
 	return count;
+}
+
+long __det_start(struct task_struct *task)
+{
+	struct popcorn_namespace *ns;
+	unsigned long flags;
+	int i;
+
+	if(!is_popcorn(task)) {
+		return 0;
+	}
+
+	ns = task->nsproxy->pop_ns;
+	for (;;) {
+		task->ft_det_state = FT_DET_WAIT_TOKEN;
+		set_task_state(task, TASK_INTERRUPTIBLE);
+		if (have_token(task)) {
+			break;
+		}
+		schedule();
+	}
+	task->ft_det_state = FT_DET_ACTIVE;
+	set_task_state(task, TASK_RUNNING);
+
+	return 1;
+}
+
+asmlinkage long sys_popcorn_det_start(void)
+{
+	__det_start(current);
+}
+
+asmlinkage long sys_popcorn_det_tick(long tick)
+{
+	struct popcorn_namespace *ns;
+
+	if(is_popcorn(current)) {
+		update_tick(current, tick);
+		ns = current->nsproxy->pop_ns;
+		return 0;
+	}
+
+	return 0;
+}
+
+long __det_end(struct task_struct *task)
+{
+	struct popcorn_namespace *ns;
+	unsigned long flags;
+
+	if(!is_popcorn(task)) {
+		return 0;
+	}
+
+	ns = task->nsproxy->pop_ns;
+
+	task->ft_det_state = FT_DET_INACTIVE;
+	update_tick(task, 1);
+	//dump_task_list(ns);
+
+	return 1;
+}
+
+asmlinkage long sys_popcorn_det_end(void)
+{
+	return __det_end(current);
 }
 
 static int register_popcorn_ns(void)

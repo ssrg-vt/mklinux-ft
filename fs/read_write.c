@@ -20,6 +20,8 @@
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
 
+#include <linux/popcorn_namespace.h>
+
 const struct file_operations generic_ro_fops = {
 	.llseek		= generic_file_llseek,
 	.read		= do_sync_read,
@@ -412,6 +414,7 @@ ssize_t do_sync_write(struct file *filp, const char __user *buf, size_t len, lof
 	if (-EIOCBQUEUED == ret)
 		ret = wait_on_sync_kiocb(&kiocb);
 	*ppos = kiocb.ki_pos;
+
 	return ret;
 }
 
