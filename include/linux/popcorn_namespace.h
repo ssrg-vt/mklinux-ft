@@ -18,7 +18,7 @@
 
 // If AGGRESSIVE_DET is enabled, for all the blocking system calls,
 // only Futex will be skipped
-#define AGGRESSIVE_DET 0
+#define AGGRESSIVE_DET 1
 
 struct popcorn_namespace *get_popcorn_ns(struct popcorn_namespace *ns);
 struct popcorn_namespace *copy_pop_ns(unsigned long flags, struct popcorn_namespace *ns);
@@ -64,9 +64,9 @@ static inline void dump_task_list(struct popcorn_namespace *ns)
 	list_for_each(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		if (ns->token != NULL && objPtr->task == ns->token->task)
-			printk("%d(%d)[%d][%d][o] -> ", objPtr->task->pid, atomic_read(&objPtr->task->ft_det_tick), objPtr->task->state, objPtr->task->ft_det_state);
+			printk("%d(%d)[%d][%d]<%d>[o] -> ", objPtr->task->pid, atomic_read(&objPtr->task->ft_det_tick), objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall);
 		else
-			printk("%d(%d)[%d][%d][x] -> ", objPtr->task->pid, atomic_read(&objPtr->task->ft_det_tick), objPtr->task->state, objPtr->task->ft_det_state);
+			printk("%d(%d)[%d][%d]<%d>[x] -> ", objPtr->task->pid, atomic_read(&objPtr->task->ft_det_tick), objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall);
 	}
 	printk("\n");
 	spin_unlock(&ns->task_list_lock);
@@ -181,10 +181,10 @@ static inline int update_token(struct popcorn_namespace *ns)
 		tick_value = atomic_read(&objPtr->task->ft_det_tick);
 		if (min_value >= tick_value) {
 #ifdef AGGRESSIVE_DET 
-			if(!(objPtr->task->state == TASK_RUNNING ||
-				 objPtr->task->state == TASK_WAKING ||
-				 objPtr->task->ft_det_state == FT_DET_WAIT_TOKEN) &&
-					objPtr->task->current_syscall == 202) { // Skip futex
+			if(objPtr->task->current_syscall == 202 &&
+				(objPtr->task->state == TASK_INTERRUPTIBLE ||
+				 objPtr->task->state == TASK_UNINTERRUPTIBLE)) { // Skip futex
+				printk("holy shit skipped! %d\n", objPtr->task->pid);
 			} else {
 #else
 			if(objPtr->task->state == TASK_RUNNING ||
@@ -200,7 +200,8 @@ static inline int update_token(struct popcorn_namespace *ns)
 	if (ns->token != NULL &&
 			ns->token->task != NULL) {
 		ns->last_tick = atomic_read(&ns->token->task->ft_det_tick);
-		if (ns->token->task->state == TASK_INTERRUPTIBLE) {
+		if (ns->token->task->state == TASK_INTERRUPTIBLE &&
+				ns->token->task->ft_det_state == FT_DET_WAIT_TOKEN) {
 			wake_up_process(ns->token->task);
 		}
 	}
@@ -215,7 +216,7 @@ static inline int update_tick(struct task_struct *task, long tick)
 	ns = task->nsproxy->pop_ns;
 
 	//dump_task_list(ns);
-	atomic_add(&task->ft_det_tick, tick);
+	atomic_add(tick, &task->ft_det_tick);
 	spin_lock_irqsave(&ns->task_list_lock, flags);
 	update_token(ns);
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
@@ -236,14 +237,14 @@ static inline void det_wake_up(struct task_struct *task)
 		update_token(ns);
 		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	} else {
+		update_token(ns);
 		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	}
 
 	if (task->ft_det_state == FT_DET_ACTIVE) {
 		__det_start(task);
 	}
-	//printk("Waking up %d from %pS with tick %d\n", task->pid, __builtin_return_address(1), task->ft_det_tick);
-	//dump_task_list(ns);
+	printk("Waking up %d from %pS with tick %d\n", task->pid, __builtin_return_address(1), task->ft_det_tick);
 }
 
 static inline int have_token(struct task_struct *task)
@@ -254,11 +255,11 @@ static inline int have_token(struct task_struct *task)
 	ns = task->nsproxy->pop_ns;
 
 	spin_lock_irqsave(&ns->task_list_lock, flags);
-	if (ns->token->task == task) {
+	update_token(ns);
+	if (ns->token != NULL && ns->token->task == task) {
 		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 		return 1;
 	} else {
-//		update_token(ns);
 		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 		return 0;
 	}
