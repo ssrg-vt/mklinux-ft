@@ -202,6 +202,7 @@ long __det_start(struct task_struct *task)
 		return 0;
 	}
 
+	ns = task->nsproxy->pop_ns;
 	for (;;) {
 		task->ft_det_state = FT_DET_WAIT_TOKEN;
 		set_task_state(task, TASK_INTERRUPTIBLE);
@@ -228,7 +229,6 @@ asmlinkage long sys_popcorn_det_tick(long tick)
 	if(is_popcorn(current)) {
 		update_tick(current, tick);
 		ns = current->nsproxy->pop_ns;
-		dump_task_list(ns);
 		return 0;
 	}
 

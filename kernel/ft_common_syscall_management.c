@@ -848,7 +848,9 @@ void syscall_hook_exit(struct pt_regs *regs)
             if (!(syscall_info_table[regs->ax] & NOSLEEP)) {
                 // Deterministically wake up, basically futex
                 // TODO: too ugly
-                det_wake_up(current);
+                if (current->ft_det_state == FT_DET_ACTIVE) {
+                    det_wake_up(current);
+                }
                 // Skip futex
                 if (regs->ax != __NR_futex) {
                     printk("Imma trying to wake %d up with %d\n", current->pid, regs->ax);
