@@ -2667,9 +2667,11 @@ long do_futex(u32 __user *uaddr, int op, u32 val, ktime_t *timeout,
 		val3 = FUTEX_BITSET_MATCH_ANY;
 	case FUTEX_WAIT_BITSET:
 		ret = futex_wait(uaddr, flags, val, timeout, val3);
-		if (is_popcorn(current)) {
-			det_wake_up(current);
-		}
+		/*
+		 *if (is_popcorn(current)) {
+		 *    det_wake_up(current);
+		 *}
+		 */
 		break;
 	case FUTEX_WAKE:
 		val3 = FUTEX_BITSET_MATCH_ANY;
