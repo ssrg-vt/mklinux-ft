@@ -184,7 +184,6 @@ static inline int update_token(struct popcorn_namespace *ns)
 			if(objPtr->task->current_syscall == 202 &&
 				(objPtr->task->state == TASK_INTERRUPTIBLE ||
 				 objPtr->task->state == TASK_UNINTERRUPTIBLE)) { // Skip futex
-				printk("holy shit skipped! %d\n", objPtr->task->pid);
 			} else {
 #else
 			if(objPtr->task->state == TASK_RUNNING ||

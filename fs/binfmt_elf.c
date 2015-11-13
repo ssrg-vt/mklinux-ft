@@ -994,11 +994,9 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
      */
 
 #ifdef FT_POPCORN
-	/*
-	 *retval= maybe_create_replicas();
-	 *if(retval!=0)
-	 *    goto out;
-	 */
+	retval= maybe_create_replicas();
+	if(retval!=0)
+		goto out;
 #endif
 
 #ifdef PROCESS_SERVER_USE_KMOD

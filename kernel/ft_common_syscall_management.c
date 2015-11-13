@@ -853,8 +853,10 @@ void syscall_hook_exit(struct pt_regs *regs)
                 }
                 // Skip futex
                 if (regs->ax != __NR_futex) {
-                    printk("Imma trying to wake %d up with %d\n", current->pid, regs->ax);
-	                dump_task_list(current->nsproxy->pop_ns);
+					/*
+                     *printk("Imma trying to wake %d up with %d\n", current->pid, regs->ax);
+					 *dump_task_list(current->nsproxy->pop_ns);
+					 */
 				}
             }
         }
