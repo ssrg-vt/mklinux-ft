@@ -83,6 +83,7 @@
 #include <linux/pid_namespace.h>
 #include <linux/fs_struct.h>
 #include <linux/slab.h>
+#include <linux/popcorn_namespace.h>
 #ifdef CONFIG_HARDWALL
 #include <asm/hardwall.h>
 #endif
@@ -2617,6 +2618,33 @@ static int proc_base_fill_cache(struct file *filp, void *dirent,
 				proc_base_instantiate, task, p);
 }
 
+#ifdef FT_POPCORN
+static int proc_pid_det_state(struct seq_file *m, struct pid_namespace *pidns,
+			  struct pid *pid, struct task_struct *task)
+{
+	int ret = 0;
+	struct popcorn_namespace *ns;
+	if (!is_popcorn(task))
+		return 0;
+
+	ns = task->nsproxy->pop_ns;
+	struct list_head *iter= NULL;
+	struct task_list *objPtr;
+	spin_lock(&ns->task_list_lock);
+	list_for_each(iter, &ns->ns_task_list.task_list_member) {
+		objPtr = list_entry(iter, struct task_list, task_list_member);
+		if (ns->token != NULL && objPtr->task == ns->token->task)
+			seq_printf(m, "%d(%d)[%d][%d]<%d>[o] -> ", objPtr->task->pid, atomic_read(&objPtr->task->ft_det_tick), objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall);
+		else
+			seq_printf(m, "%d(%d)[%d][%d]<%d>[x] -> ", objPtr->task->pid, atomic_read(&objPtr->task->ft_det_tick), objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall);
+	}
+	seq_printf(m, "\n");
+	spin_unlock(&ns->task_list_lock);
+
+	return 0;
+}
+#endif
+
 #ifdef CONFIG_TASK_IO_ACCOUNTING
 static int do_io_accounting(struct task_struct *task, char *buffer, int whole)
 {
@@ -2771,6 +2799,9 @@ static const struct pid_entry tgid_base_stuff[] = {
 #endif
 #ifdef CONFIG_HARDWALL
 	INF("hardwall",   S_IRUGO, proc_pid_hardwall),
+#endif
+#ifdef FT_POPCORN
+	ONE("det_state",  S_IRUGO, proc_pid_det_state),
 #endif
 };
 
@@ -3113,6 +3144,9 @@ static const struct pid_entry tid_base_stuff[] = {
 #endif
 #ifdef CONFIG_HARDWALL
 	INF("hardwall",   S_IRUGO, proc_pid_hardwall),
+#endif
+#ifdef FT_POPCORN
+	ONE("det_state",  S_IRUGO, proc_pid_det_state),
 #endif
 };
 
