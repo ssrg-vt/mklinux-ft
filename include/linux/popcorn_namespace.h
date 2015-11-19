@@ -183,7 +183,8 @@ static inline int update_token(struct popcorn_namespace *ns)
 #ifdef AGGRESSIVE_DET 
 			if(objPtr->task->current_syscall == 202 &&
 				(objPtr->task->state == TASK_INTERRUPTIBLE ||
-				 objPtr->task->state == TASK_UNINTERRUPTIBLE)) { // Skip futex
+				 objPtr->task->state == TASK_UNINTERRUPTIBLE) &&
+				!objPtr->task->ft_det_state == FT_DET_WAIT_TOKEN) { // Skip futex
 			} else {
 #else
 			if(objPtr->task->state == TASK_RUNNING ||
