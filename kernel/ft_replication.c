@@ -517,7 +517,9 @@ void send_to_all_secondary_replicas(struct ft_pop_rep* ft_popcorn, struct pcn_km
                 objPtr = list_entry(iter, struct replica_id_list, replica_list_member);
                 secondary_replica= objPtr->replica;
 
-                pcn_kmsg_send_long(secondary_replica.kernel, msg, msg_size-sizeof(msg->hdr));
+                if(pcn_kmsg_send_long(secondary_replica.kernel, msg, msg_size-sizeof(msg->hdr))==-1){
+			printk("ERROR: %s impossible to send to cpu %d\n", __func__, secondary_replica.kernel);
+		}
 
         }
 

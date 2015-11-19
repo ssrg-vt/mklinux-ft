@@ -2933,7 +2933,7 @@ static void dispatch_copy_msg(struct work_struct* work){
 	char* filter_id_printed;
 	unsigned long time_to_wait;
 
-	if(my_work->count > 10 && (my_work->count%10)==0){
+	if(my_work->count > 50 && (my_work->count%50)==0){
 		filter_id_printed= print_filter_id(filter);
                 printk("%s: WARNING work count is %d msg->pckt_id %llu primary rx %llu deliver_pckts %d in %s filter %s\n", __func__, my_work->count,  msg->pckt_id, filter->primary_rx, filter->deliver_packets, (filter->type & FT_FILTER_FAKE)?"fake":"", filter_id_printed);
                 if(filter_id_printed)
@@ -2957,7 +2957,7 @@ again:	spin_lock_bh(&filter->lock);
 		}
 
 		//no way too long, you are an error or your real filter was closed before
-		if((filter->type & FT_FILTER_FAKE) && my_work->count > 200){
+		if(((filter->type & FT_FILTER_FAKE) && my_work->count > 200) || my_work->count > 300){
 
 			filter_id_printed= print_filter_id(filter);
                 	printk("%s: WARNING dropping msg->pckt_id %llu primary rx %llu deliver_pckts %d in %s filter %s\n", __func__, msg->pckt_id, filter->primary_rx, filter->deliver_packets, (filter->type & FT_FILTER_FAKE)?"fake":"", filter_id_printed);
@@ -3135,8 +3135,12 @@ again:  filter= find_and_get_filter(&msg->creator, msg->filter_id, msg->is_child
 #endif
 
                 ret= create_fake_filter(&msg->creator, msg->filter_id, msg->is_child, msg->daddr, msg->dport);
-                if(!ret)
+                if(!ret){
                         goto again;
+		}
+		else{
+			printk("ERROR: %s impossible to create fake filter\n", __func__);
+		}
         }
 
 out:

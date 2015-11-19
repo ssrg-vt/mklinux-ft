@@ -136,7 +136,7 @@ static inline int win_put(struct pcn_kmsg_window *win,
 			  int no_block) 
 {
 	unsigned long ticket;
-    unsigned long long sleep_start;
+    	unsigned long long sleep_start;
 
 	/* if we can't block and the queue is already really long, 
 	   return EAGAIN */
@@ -147,6 +147,9 @@ static inline int win_put(struct pcn_kmsg_window *win,
 
 	/* grab ticket */
 	ticket = fetch_and_add(&win->head, 1);
+	if(ticket >= ULONG_MAX)
+		printk("ERROR threashold ticket reached\n");
+
 	PCN_DEBUG(KERN_ERR "%s: ticket = %lu, head = %lu, tail = %lu\n", 
 		 __func__, ticket, win->head, win->tail);
 
@@ -820,7 +823,7 @@ static int __pcn_kmsg_send(unsigned int dest_cpu, struct pcn_kmsg_message *msg,
 	dest_window = rkvirt[dest_cpu];
 
 	if (unlikely(!rkvirt[dest_cpu])) {
-		//KMSG_ERR("Dest win for CPU %d not mapped!\n", dest_cpu);
+		KMSG_ERR("Dest win for CPU %d not mapped!\n", dest_cpu);
 		//return -1;
 		rc= -1;
 		goto exit;
@@ -900,7 +903,7 @@ int pcn_kmsg_send_long(unsigned int dest_cpu,
 	}
 
 	 if ( num_chunks >= MAX_CHUNKS ){
-		 KMSG_PRINTK("Message too long (size:%d, chunks:%d, max:%d) can not be transferred\n",
+		printk("Message too long (size:%d, chunks:%d, max:%d) can not be transferred\n",
 	                payload_size, num_chunks, MAX_CHUNKS);
 	        return -1;
 	 }
@@ -925,7 +928,7 @@ int pcn_kmsg_send_long(unsigned int dest_cpu,
 		       i * PCN_KMSG_PAYLOAD_SIZE, 
 		       PCN_KMSG_PAYLOAD_SIZE);
 
-		ret=__pcn_kmsg_send(dest_cpu, &this_chunk, 0);
+		ret= __pcn_kmsg_send(dest_cpu, &this_chunk, 0);
 		if(ret!=0)
 			return ret;
 	}

@@ -34,6 +34,20 @@ unsigned int inet_addr(char *str)
     return *(unsigned int *)arr;
 }
 
+void print_time(unsigned long long time[], int size_time){
+	char tbuf[50];
+	unsigned tlen;
+	unsigned long nanosec_rem;
+ 	int i;
+ 
+	for(i=0; i<size_time; i++){
+		nanosec_rem = do_div(time[i], 1000000000);
+        	tlen = sprintf(tbuf, "[%5lu.%06lu] ", (unsigned long) time[i], nanosec_rem / 1000);
+		printk("time %d: %s\n", i, tbuf);
+	}
+	
+}
+
 static void process_crash_kernel_notification(struct work_struct *work){
 	struct pci_dev *dev;
 	struct pci_dev *prev;
@@ -43,16 +57,30 @@ static void process_crash_kernel_notification(struct work_struct *work){
 	struct ifreq ifr;
 	struct socket *sock;
 	unsigned int *addr;
+	unsigned long long time[7];
+	unsigned long long start_up,start_addr;
 	
-	printk("%s called\n", __func__);
+	//printk("%s called\n", __func__);
+
+	//0=> func total time 
+	time[0]= cpu_clock(_cpu);
+
 	kfree(work);
 
-	 //reenable device
+	//1=> scan bus time
+	time[1]= cpu_clock(_cpu);
+
+	//reenable device
         pci_dev_list_remove(0,"0x8086","0x10c9","0.0","", 0);
 
         bus = NULL;
         while ((bus = pci_find_next_bus(bus)) != NULL)
                          pci_rescan_bus(bus);
+
+	time[1]= cpu_clock(_cpu)- time[1];
+
+	//2=> find device
+	time[2]= cpu_clock(_cpu);
 
 	//scan the buses to activate the device
         dev= NULL;
@@ -65,6 +93,7 @@ static void process_crash_kernel_notification(struct work_struct *work){
                 prev= dev;
 
         }while(dev!= NULL && !found);
+	time[2]= cpu_clock(_cpu)- time[2];
 
         if(!dev){
                 printk("ERROR: %s device not found\n", __func__);
@@ -81,19 +110,19 @@ static void process_crash_kernel_notification(struct work_struct *work){
                 return;
 	}	
 
-	printk("filters flushed\n");
+	//printk("filters flushed\n");
 	
 	if(trim_stable_buffer_in_filters()){
 		printk("ERROR: %s impossible to trim filters\n", __func__);
                 return;
 	}	
-	printk("stable buffer trimmed\n");
+	//printk("stable buffer trimmed\n");
 
 	if(flush_send_buffer_in_filters()){
                 printk("ERROR: %s impossible to flush send buffers\n", __func__);
                 return;
         }
-        printk("send buffer flushed\n");
+        //printk("send buffer flushed\n");
 	
 	//set the net device up
 	//the idea is to emulate what ifconfig does
@@ -103,12 +132,21 @@ static void process_crash_kernel_notification(struct work_struct *work){
 	//NOTE for now net dev name (eth1) and desired address (10.1.1.48) are hardcoded
 	//TODO extract dev name from net_dev
 
+	//3=> create socket
+	time[3]= cpu_clock(_cpu);
+
 	sock= NULL;
 	fd= sock_create_kern( PF_INET, SOCK_DGRAM, IPPROTO_IP, &sock);
 	if(!sock || !sock->ops ||  !sock->ops->ioctl){
 		printk("ERROR: %s impossible create socket\n", __func__);
 		return;
 	}
+	time[3]= cpu_clock(_cpu)- time[3];
+
+	//4=> eth up
+
+	time[4]= cpu_clock(_cpu);
+        start_up= time[4];
 
 	//fs needs to be changed to be able to call ioctl from kernel space
 	// (it is supposed to be called througth a system_call)
@@ -125,6 +163,12 @@ static void process_crash_kernel_notification(struct work_struct *work){
 
         sock->ops->ioctl(sock,  SIOCSIFFLAGS, (long unsigned int)&ifr);
 
+	time[4]= cpu_clock(_cpu)- time[4];
+
+	//5=> set eth addr
+	time[5]= cpu_clock(_cpu);
+	start_addr= time[5];
+
 	memset(&ifr,0,sizeof(ifr));
         
 	memcpy(ifr.ifr_name, "eth1", sizeof("eth1"));
@@ -138,11 +182,15 @@ static void process_crash_kernel_notification(struct work_struct *work){
 
   
 	set_fs(fs); /* restore before returning to user space */	
-
-	printk("network up\n");
+	
+	time[5]= cpu_clock(_cpu)- time[5];
+	//printk("network up\n");
 
 	update_replica_type_after_failure();
-	printk("replica type updated\n");
+	//printk("replica type updated\n");
+
+	//5=> dummy driver down
+        time[6]= cpu_clock(_cpu);
 
 	fs = get_fs();     /* save previous value */
         set_fs (get_ds()); /* use kernel limit */
@@ -158,11 +206,20 @@ static void process_crash_kernel_notification(struct work_struct *work){
         
         set_fs(fs); /* restore before returning to user space */
 
-	printk("dummy_driver down\n");
+        time[6]= cpu_clock(_cpu)- time[6];
+	
+	//printk("dummy_driver down\n");
 
 	flush_syscall_info();
-	printk("syscall info updated\n");
+	//printk("syscall info updated\n");
 
+	time[0]= cpu_clock(_cpu)- time[0];
+	
+	print_time(time, 7);
+	printk("start_up: ");
+	print_time(&start_up, 1);
+	printk("start_addr: ");
+	print_time(&start_addr, 1);
 	return;
 }
 

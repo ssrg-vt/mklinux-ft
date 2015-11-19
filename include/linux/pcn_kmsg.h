@@ -123,7 +123,7 @@ enum pcn_kmsg_prio {
 };
 
 #define __READY_SIZE 1
-#define LG_SEQNUM_SIZE  (8 - __READY_SIZE)
+#define LG_SEQNUM_SIZE  (10 - __READY_SIZE)
 
 /* Message header */
 struct pcn_kmsg_hdr {
