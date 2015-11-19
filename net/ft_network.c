@@ -377,6 +377,13 @@ out:
 		data_size= remove_and_copy_from_stable_buffer_no_wait(sk->ft_filter->stable_buffer, msg->msg_iov, size);
                 if(data_size > 0){
 			FTMPRINTK("%s copied %d bytes from stable buffer\n", __func__, data_size);
+
+			if(data_size!=size){
+				printk("%s WARNING returning %i bytes when asked %i FIXME!!!\n", __func__, data_size, size);
+				//msg->msg_iov should be already update with the correct offset
+				//call normal tcp_recv with size= size-data_size
+				
+			}
 	
 			if(is_there_any_secondary_replica(current->ft_popcorn)){			
 
@@ -590,7 +597,7 @@ int ft_before_syscall_rcv_family(struct kiocb *iocb, struct socket *sock,
                                        struct msghdr *msg, size_t size, int flags, int* ret){
 
         if(ft_is_replicated(current)){
-                return before_syscall_rcv_family_replicated_sock(iocb, sock, msg, size, flags, ret);
+		return before_syscall_rcv_family_replicated_sock(iocb, sock, msg, size, flags, ret);
         }
 
         return FT_SYSCALL_CONTINUE;

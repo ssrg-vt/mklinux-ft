@@ -602,7 +602,7 @@ static int ft_wake_up_primary_after_secondary(void){
 					goto out;
 				}
 				wait_info= (struct wait_syscall*) app->obj;
-				if(ft_is_primary_after_secondary_replica(wait_info->task)){
+				if(wait_info->task && ft_is_primary_after_secondary_replica(wait_info->task)){
 					wait_info->populated= 1;
 			                wake_up_process(wait_info->task);
 				}
