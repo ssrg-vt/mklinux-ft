@@ -9,6 +9,7 @@
 #include <linux/slab.h>
 #include <linux/net.h>
 #include <net/sock.h>
+#include <linux/tcp.h>
 
 #define FT_NET_VERBOSE 0
 #define FT_NET_MVERBOSE 0
@@ -379,15 +380,32 @@ out:
 			FTMPRINTK("%s copied %d bytes from stable buffer\n", __func__, data_size);
 
 			if(data_size!=size){
-				printk("%s WARNING returning %i bytes when asked %i FIXME!!!\n", __func__, data_size, size);
+				char* filter_id_printed= print_filter_id(sk->ft_filter);
+				FTPRINTK("%s WARNING got only %d bytes in stable buffer (needed %d), asking socket %s next %u\n", __func__, data_size, size,filter_id_printed,tcp_sk(sk)->rcv_nxt );
+				kfree(filter_id_printed);
 				//msg->msg_iov should be already update with the correct offset
 				//call normal tcp_recv with size= size-data_size
+
+				ret= sock->ops->recvmsg(iocb, sock, msg, size-data_size, flags);
+				if(ret!=size-data_size){
+					FTPRINTK("WARNING %s recvmsg returned %d when asked %d\n", __func__, ret, size-data_size );
+				}
+
+				
+				if(ret>0)
+					data_size+= ret;
+				else
+					data_size= ret;
 				
 			}
 	
 			if(is_there_any_secondary_replica(current->ft_popcorn)){			
 
-				syscall_info_primary= kmalloc( sizeof(*syscall_info_primary) + data_size+ 1, GFP_KERNEL);
+				if(data_size>0)
+					syscall_info_primary= kmalloc( sizeof(*syscall_info_primary) + data_size+ 1, GFP_KERNEL);
+				else
+					syscall_info_primary= kmalloc( sizeof(*syscall_info_primary), GFP_KERNEL);
+
 				if(!syscall_info_primary)
 					return -ENOMEM;
 
@@ -399,7 +417,7 @@ out:
 				* the data can be retrieved from the secondary from the packet forwarded to the stable buffer.
 				*/
 				syscall_info_primary->csum= 0;
-				if(data_size){
+				if(data_size>0){
 					where_to_copy= &syscall_info_primary->data;
 					syscall_info_primary->csum= csum_and_copy_from_user(ubuf, where_to_copy, data_size, syscall_info_primary->csum, &err);
 					if(err){
@@ -421,8 +439,10 @@ out:
 				 */
 				FTPRINTK("%s pid %d syscall_id %d sending size %d flags %d csum %d ret %d \n", __func__, current->pid, current->id_syscall, syscall_info_primary->size, syscall_info_primary->flags, syscall_info_primary->csum, syscall_info_primary->ret);
 				
-				ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) syscall_info_primary, sizeof(*syscall_info_primary)+ data_size);
-				
+				if(data_size>0)
+					ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) syscall_info_primary, sizeof(*syscall_info_primary)+ data_size);
+				else
+					ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) syscall_info_primary, sizeof(*syscall_info_primary));
 			out2:
 				kfree(syscall_info_primary);
 			

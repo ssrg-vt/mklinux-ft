@@ -195,10 +195,10 @@ struct net_filter_info{
 	struct stable_buffer *stable_buffer;
 	struct send_buffer *send_buffer;
 	
-	u32 my_initial_out_seq;
-	u32 in_initial_seq;
-	u32 idelta_seq;
-	u32 odelta_seq;
+	__u32 my_initial_out_seq;
+	__u32 in_initial_seq;
+	__u32 idelta_seq;
+	__u32 odelta_seq;
 };
 
 void get_ft_filter(struct net_filter_info* filter);
