@@ -840,7 +840,7 @@ long syscall_hook_enter(struct pt_regs *regs)
 void syscall_hook_exit(struct pt_regs *regs)
 {
         // System call number is in ax
-        if(ft_is_replicated(current) && (
+        if(is_popcorn(current) && (
                     regs->ax != __NR_popcorn_det_start &&
                     regs->ax != __NR_popcorn_det_end &&
                     regs->ax != __NR_popcorn_det_tick)) {
@@ -851,13 +851,6 @@ void syscall_hook_exit(struct pt_regs *regs)
                 if (current->ft_det_state == FT_DET_ACTIVE) {
                     det_wake_up(current);
                 }
-                // Skip futex
-                if (regs->ax != __NR_futex) {
-					/*
-                     *printk("Imma trying to wake %d up with %d\n", current->pid, regs->ax);
-					 *dump_task_list(current->nsproxy->pop_ns);
-					 */
-				}
             }
         }
         current->current_syscall = -1;

@@ -18,7 +18,8 @@
 
 // If AGGRESSIVE_DET is enabled, for all the blocking system calls,
 // only Futex will be skipped
-#define AGGRESSIVE_DET 1
+//#define AGGRESSIVE_DET 1
+#define DETONLY
 
 struct popcorn_namespace *get_popcorn_ns(struct popcorn_namespace *ns);
 struct popcorn_namespace *copy_pop_ns(unsigned long flags, struct popcorn_namespace *ns);
@@ -237,14 +238,14 @@ static inline void det_wake_up(struct task_struct *task)
 		update_token(ns);
 		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	} else {
-		update_token(ns);
 		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	}
 
 	if (task->ft_det_state == FT_DET_ACTIVE) {
+		task->current_syscall = 319;
 		__det_start(task);
 	}
-	printk("Waking up %d from %pS with tick %d\n", task->pid, __builtin_return_address(1), task->ft_det_tick);
+//	printk("Waking up %d from %d with tick %d\n", task->pid, task->current_syscall, task->ft_det_tick);
 }
 
 static inline int have_token(struct task_struct *task)
@@ -255,7 +256,6 @@ static inline int have_token(struct task_struct *task)
 	ns = task->nsproxy->pop_ns;
 
 	spin_lock_irqsave(&ns->task_list_lock, flags);
-	update_token(ns);
 	if (ns->token != NULL && ns->token->task == task) {
 		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 		return 1;
