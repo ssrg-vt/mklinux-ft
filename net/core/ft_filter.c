@@ -163,8 +163,7 @@ struct tcp_param_work{
 };
 
 static struct workqueue_struct *tx_notify_wq;
-extern int _cpu;
-static struct list_head filter_list_head;
+struct list_head filter_list_head;
 DEFINE_SPINLOCK(filter_list_lock);
 
 struct handshake_work{
@@ -2695,7 +2694,7 @@ out:
 static void dispatch_handshake_msg(struct work_struct* work){
 	struct handshake_work* my_work= (struct handshake_work*) work;
 
-	FTPRINTK("%s ack and syn dispatching: syn seq %u skb %p ack seq %u skb %p port %d ip %d\n", __func__, my_work->syn_seq, my_work->syn, my_work->ack_seq, my_work->ack, ntohs(my_work->port), my_work->source);
+	printk("%s ack and syn dispatching: syn seq %u  ack seq %u port %d ip %d\n", __func__, my_work->syn_seq, my_work->ack_seq, ntohs(my_work->port), my_work->source);
 
 	local_bh_disable();
         netif_receive_skb(my_work->syn);
@@ -4366,6 +4365,9 @@ unsigned int ft_hook_before_tcp_secondary(struct sk_buff *skb, struct net_filter
 					ret= insert_in_stable_buffer(filter->stable_buffer, skb, start, end-1-tcp_header->fin);	
 				}
 
+				printk("%s saving pckt on stable buffer %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", __func__, filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
+
+				ret= insert_in_stable_buffer(filter->stable_buffer, skb, start, end-1-tcp_header->fin);	
 				if(ret){
 					printk("ERROR %s impossible to save in stable buffer ret %d\n", __func__, ret);
 					goto out;
