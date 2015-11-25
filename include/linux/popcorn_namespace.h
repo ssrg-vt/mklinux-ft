@@ -181,17 +181,9 @@ static inline int update_token(struct popcorn_namespace *ns)
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		tick_value = atomic_read(&objPtr->task->ft_det_tick);
 		if (min_value >= tick_value) {
-#ifdef AGGRESSIVE_DET 
-			if(objPtr->task->current_syscall == 202 &&
-				(objPtr->task->state == TASK_INTERRUPTIBLE ||
-				 objPtr->task->state == TASK_UNINTERRUPTIBLE) &&
-				!objPtr->task->ft_det_state == FT_DET_WAIT_TOKEN) { // Skip futex
-			} else {
-#else
 			if(objPtr->task->state == TASK_RUNNING ||
 				 objPtr->task->state == TASK_WAKING ||
 				 objPtr->task->ft_det_state == FT_DET_WAIT_TOKEN) {
-#endif
 				new_token = objPtr;
 				min_value = tick_value;
 			}
@@ -233,13 +225,9 @@ static inline void det_wake_up(struct task_struct *task)
 	ns = task->nsproxy->pop_ns;
 
 	spin_lock_irqsave(&ns->task_list_lock, flags);
-	if (ns->last_tick > atomic_read(&task->ft_det_tick)) {
-		atomic_set(&task->ft_det_tick, ns->last_tick);
-		update_token(ns);
-		spin_unlock_irqrestore(&ns->task_list_lock, flags);
-	} else {
-		spin_unlock_irqrestore(&ns->task_list_lock, flags);
-	}
+	atomic_set(&task->ft_det_tick, ns->last_tick);
+	update_token(ns);
+	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 
 	if (task->ft_det_state == FT_DET_ACTIVE) {
 		task->current_syscall = 319;

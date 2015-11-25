@@ -1768,7 +1768,7 @@ static void futex_wait_queue_me(struct futex_hash_bucket *hb, struct futex_q *q,
 	 */
 	set_current_state(TASK_INTERRUPTIBLE);
 
-#ifndef DETONLY
+//#ifndef DETONLY
 	if (is_popcorn(current)) {
 		ns = current->nsproxy->pop_ns;
 		smp_mb();
@@ -1776,7 +1776,7 @@ static void futex_wait_queue_me(struct futex_hash_bucket *hb, struct futex_q *q,
 		update_token(ns);
 		spin_unlock(&ns->task_list_lock);
 	}
-#endif
+//#endif
 
 	queue_me(q, hb);
 
@@ -2669,11 +2669,9 @@ long do_futex(u32 __user *uaddr, int op, u32 val, ktime_t *timeout,
 		val3 = FUTEX_BITSET_MATCH_ANY;
 	case FUTEX_WAIT_BITSET:
 		ret = futex_wait(uaddr, flags, val, timeout, val3);
-		/*
-		 *if (is_popcorn(current)) {
-		 *    det_wake_up(current);
-		 *}
-		 */
+		if (is_popcorn(current)) {
+			det_wake_up(current);
+		}
 		break;
 	case FUTEX_WAKE:
 		val3 = FUTEX_BITSET_MATCH_ANY;
