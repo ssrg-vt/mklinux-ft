@@ -487,7 +487,7 @@ static int before_syscall_rcv_family_secondary(struct kiocb *iocb, struct socket
         __wsum my_csum;
         int err, ret= FT_SYSCALL_DROP;
 
-        printk("%s started for pid %d syscall_id %d\n", __func__, current->pid, current->id_syscall);
+        FTPRINTK("%s started for pid %d syscall_id %d\n", __func__, current->pid, current->id_syscall);
 
         syscall_info_primary= (struct rcv_fam_info *) ft_wait_for_syscall_info(&current->ft_pid, current->id_syscall);
         if(!syscall_info_primary){
@@ -563,7 +563,7 @@ static int before_syscall_rcv_family_secondary(struct kiocb *iocb, struct socket
 
 	if(my_csum != syscall_info_primary->csum){
 		char* filter_print= print_filter_id(sock->sk->ft_filter);
-                printk("ERROR: %s for pid %d csum of rcv (syscall id %d) not matching between primary(%d) and secondary(%d) in filter %s\n", __func__, current->pid, current->id_syscall, syscall_info_primary->csum, my_csum, filter_print);
+                printk("ERROR: %s for pid %d csum of rcv (syscall id %d) not matching between primary(%d) and secondary(%d) for %d bytes in filter %s\n", __func__, current->pid, current->id_syscall, syscall_info_primary->csum, my_csum, data_size, filter_print);
 		if(filter_print)
 			kfree(filter_print);
         	ret= -EFAULT;
