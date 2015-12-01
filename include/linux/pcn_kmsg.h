@@ -202,7 +202,7 @@ struct pcn_kmsg_checkin_message {
 
 /* WINDOW / BUFFERING */
 
-#define PCN_KMSG_RBUF_SIZE 256
+#define PCN_KMSG_RBUF_SIZE (256*8)
 
 struct pcn_kmsg_window {
 	volatile unsigned long head;
