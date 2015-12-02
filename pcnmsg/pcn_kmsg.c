@@ -657,6 +657,10 @@ static int __init pcn_kmsg_init(void)
 	}
 
 	/* Malloc our own receive buffer and set it up */
+if (ROUND_PAGE_SIZE(sizeof(struct pcn_kmsg_window)) > KMALLOC_MAX_SIZE)
+  printk(KERN_ALERT"%s: The next attempt to allocate memory will fail. Requested=0x%lx, max=0x%lx.\n",
+        __func__, (unsigned long)ROUND_PAGE_SIZE(sizeof(struct pcn_kmsg_window)), (unsigned long)KMALLOC_MAX_SIZE);
+
 	win_virt_addr = kmalloc(ROUND_PAGE_SIZE(sizeof(struct pcn_kmsg_window)), GFP_KERNEL);
 	if (win_virt_addr) {
 		KMSG_INIT("Allocated %ld(%ld) bytes for my win, virt addr 0x%p\n", 
