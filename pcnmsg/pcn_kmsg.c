@@ -514,8 +514,9 @@ static int pcn_read_proc(char *page, char **start, off_t off, int count, int *eo
         p +=sprintf (p,"[s%d]->: %pB\n",
            			(idx+i),(void*) log_function_send[(idx+i)%LOGCALL] );
 
-    for(i=0; i<PCN_KMSG_RBUF_SIZE; i++)
-    	p +=sprintf (p,"second_buffer[%i]=%i\n",i,rkvirt[my_cpu]->second_buffer[i]);
+//    for(i=0; i<PCN_KMSG_RBUF_SIZE; i++)
+    for(i=0; i<((PCN_KMSG_RBUF_SIZE >32) ? 32 : PCN_KMSG_RBUF_SIZE); i++)
+    	p +=sprintf (p,"sb[%i]=%i\n",i,rkvirt[my_cpu]->second_buffer[i]);
 
 
 	len = (p -page) - off;
