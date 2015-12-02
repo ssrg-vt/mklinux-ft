@@ -1386,7 +1386,7 @@ static void release_filter(struct kref *kref){
 }
 
 void get_ft_filter(struct net_filter_info* filter){
-//	printk("get daddr %u dport %u from %pS\n", filter->tcp_param.daddr, ntohs(filter->tcp_param.dport), __builtin_return_address(0));	
+	//printk("get daddr %u dport %u from %pS\n", filter->tcp_param.daddr, ntohs(filter->tcp_param.dport), __builtin_return_address(0));	
 	kref_get(&filter->kref);
 }
 
@@ -1394,7 +1394,7 @@ void get_ft_filter(struct net_filter_info* filter){
  *Never call this function while holding that lock.
  */
 void put_ft_filter(struct net_filter_info* filter){
-//	printk("put daddr %u dport %u from %pS\n", filter->tcp_param.daddr, ntohs(filter->tcp_param.dport), __builtin_return_address(0));
+	//printk("put daddr %u dport %u from %pS\n", filter->tcp_param.daddr, ntohs(filter->tcp_param.dport), __builtin_return_address(0));
 	kref_put(&filter->kref, release_filter);
 }
 
@@ -2813,6 +2813,8 @@ static void create_handshake_seq(struct rx_copy_work *my_work){
 	__u32 syn= 0, ack= 0, seq= 0;
 	struct handshake_work *hand_work;
 	int size;
+
+	//printk("%s called\n", __func__);
 
 	skb= create_skb_from_rx_copy_msg(msg, filter);
         if(IS_ERR(skb)){
@@ -4365,9 +4367,8 @@ unsigned int ft_hook_before_tcp_secondary(struct sk_buff *skb, struct net_filter
 					ret= insert_in_stable_buffer(filter->stable_buffer, skb, start, end-1-tcp_header->fin);	
 				}
 
-				printk("%s saving pckt on stable buffer %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", __func__, filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
+				//printk("%s saving pckt on stable buffer %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", __func__, filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
 
-				ret= insert_in_stable_buffer(filter->stable_buffer, skb, start, end-1-tcp_header->fin);	
 				if(ret){
 					printk("ERROR %s impossible to save in stable buffer ret %d\n", __func__, ret);
 					goto out;
