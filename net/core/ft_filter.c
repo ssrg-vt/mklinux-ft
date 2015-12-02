@@ -1386,7 +1386,7 @@ static void release_filter(struct kref *kref){
 }
 
 void get_ft_filter(struct net_filter_info* filter){
-	//printk("get daddr %u dport %u from %pS\n", filter->tcp_param.daddr, ntohs(filter->tcp_param.dport), __builtin_return_address(0));	
+	printk("get daddr %u dport %u from %pS %pS\n", filter->tcp_param.daddr, ntohs(filter->tcp_param.dport), __builtin_return_address(0), __builtin_return_address(1));	
 	kref_get(&filter->kref);
 }
 
@@ -1394,7 +1394,7 @@ void get_ft_filter(struct net_filter_info* filter){
  *Never call this function while holding that lock.
  */
 void put_ft_filter(struct net_filter_info* filter){
-	//printk("put daddr %u dport %u from %pS\n", filter->tcp_param.daddr, ntohs(filter->tcp_param.dport), __builtin_return_address(0));
+	printk("put daddr %u dport %u from %pS\n", filter->tcp_param.daddr, ntohs(filter->tcp_param.dport), __builtin_return_address(0));
 	kref_put(&filter->kref, release_filter);
 }
 
@@ -2814,7 +2814,7 @@ static void create_handshake_seq(struct rx_copy_work *my_work){
 	struct handshake_work *hand_work;
 	int size;
 
-	//printk("%s called\n", __func__);
+	printk("%s called\n", __func__);
 
 	skb= create_skb_from_rx_copy_msg(msg, filter);
         if(IS_ERR(skb)){
@@ -2940,6 +2940,10 @@ static void dispatch_copy_msg(struct work_struct* work){
 	char* filter_id_printed;
 	unsigned long time_to_wait;
 
+	if(filter->tcp_param.daddr==0){
+		printk("%s daddr %u dport %u \n", __func__, filter->tcp_param.daddr, ntohs(filter->tcp_param.dport));
+	}
+
 	if(my_work->count > 50 && (my_work->count%50)==0){
 		filter_id_printed= print_filter_id(filter);
                 printk("%s: WARNING work count is %d msg->pckt_id %llu primary rx %llu deliver_pckts %d in %s filter %s\n", __func__, my_work->count,  msg->pckt_id, filter->primary_rx, filter->deliver_packets, (filter->type & FT_FILTER_FAKE)?"fake":"", filter_id_printed);
@@ -2949,8 +2953,15 @@ static void dispatch_copy_msg(struct work_struct* work){
 	}
 
 again:	spin_lock_bh(&filter->lock);
-	if(filter->type & FT_FILTER_ENABLE){
 
+	if(filter->tcp_param.daddr==0){
+        	printk("after spinlock\n");
+        }
+
+	if(filter->type & FT_FILTER_ENABLE){
+		if(filter->tcp_param.daddr==0){
+			printk("enabled\n");
+		}
 		//collect handshake packets
 		if( !(filter->type & FT_FILTER_FAKE) && filter->ft_sock && filter->ft_sock->sk_state==TCP_LISTEN){
 			spin_unlock_bh(&filter->lock);
@@ -2976,6 +2987,9 @@ again:	spin_lock_bh(&filter->lock);
  
 		if(msg->pckt_id != filter->primary_rx+1){
 
+			if(filter->tcp_param.daddr==0){
+                        	printk("requeing\n");
+                	}
 			//requeue it
                         INIT_DELAYED_WORK( (struct delayed_work *)work, dispatch_copy_msg);
                         my_work->data= (void*) msg;
@@ -3001,6 +3015,9 @@ again:	spin_lock_bh(&filter->lock);
  
 		if(PR_RX_CP_MSG_SLEEP_COND){
            		
+			if(filter->tcp_param.daddr==0){
+                        	printk("condition\n");
+                	}
 			INIT_DELAYED_WORK( (struct delayed_work *)work, dispatch_copy_msg);
                         my_work->data= (void*) msg;
                         my_work->filter= filter;
@@ -3147,6 +3164,7 @@ again:  filter= find_and_get_filter(&msg->creator, msg->filter_id, msg->is_child
 		}
 		else{
 			printk("ERROR: %s impossible to create fake filter\n", __func__);
+			pcn_kmsg_free_msg(msg);
 		}
         }
 
