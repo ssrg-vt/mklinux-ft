@@ -115,6 +115,9 @@ PCN_KMSG_TYPE_REMOTE_PROC_CPUINFO_RESPONSE,
 PCN_KMSG_TYPE_REMOTE_PROC_CPUINFO_REQUEST,
 	PCN_KMSG_TYPE_MAX
 };
+#if (PCN_KMSG_TYPE_MAX > ((1<<8) -1))
+ #error "The current messaging layer don't support that many message types"
+#endif
 
 /* Enum for message priority. */
 enum pcn_kmsg_prio {
@@ -123,7 +126,7 @@ enum pcn_kmsg_prio {
 };
 
 #define __READY_SIZE 1
-#define LG_SEQNUM_SIZE  (10 - __READY_SIZE)
+#define LG_SEQNUM_SIZE  (16 - __READY_SIZE)
 
 /* Message header */
 struct pcn_kmsg_hdr {
@@ -138,21 +141,27 @@ struct pcn_kmsg_hdr {
 
 	unsigned long long_number; // b3 .. b10
 	
-	unsigned int lg_seqnum 	:LG_SEQNUM_SIZE; // b11
+	unsigned int lg_seqnum 	:LG_SEQNUM_SIZE; // b11 .. b12
 	unsigned int __ready	:__READY_SIZE;
 }__attribute__((packed));
+#if (((sizeof(struct pcn_kmsg_hdr)*8) - 24 - sizeof(unsigned long) - __READY_SIZE) != LG_SEQNUM_SIZE)
+ #error "LG_SEQNUM_SIZE is not correctly sized"
+#endif
 
 //#if ( &((struct pcn_kmsg_hdr*)0)->ready != 12 )
-//# error "ready is not the last byte of the struct"
-//#endif
+#if ( sizeof(struct pcn_kmsg_hdr) != 12 )
+ #error "pcn_kmsg_hdr is not 12 bytes"
+#endif
 
 // TODO cache size can be retrieved by the compiler, put it here
+// I do not know how it is possible that cache line is 128
+//#define CACHE_LINE_SIZE 64
 #define CACHE_LINE_SIZE 128
 //#define PCN_KMSG_PAYLOAD_SIZE 60
 #define PCN_KMSG_PAYLOAD_SIZE (CACHE_LINE_SIZE - sizeof(struct pcn_kmsg_hdr))
 
 #define MAX_CHUNKS ((1 << LG_SEQNUM_SIZE) -1)
-#define PCN_KMSG_LONG_PAYLOAD_SIZE (MAX_CHUNKS*PCN_KMSG_PAYLOAD_SIZE)
+#define PCN_KMSG_LONG_PAYLOAD_SIZE (MAX_CHUNKS * PCN_KMSG_PAYLOAD_SIZE)
 
 /* The actual messages.  The expectation is that developers will create their
    own message structs with the payload replaced with their own fields, and then
@@ -166,6 +175,9 @@ struct pcn_kmsg_message {
 	struct pcn_kmsg_hdr hdr;
 	unsigned char payload[PCN_KMSG_PAYLOAD_SIZE];
 }__attribute__((packed)) __attribute__((aligned(CACHE_LINE_SIZE)));
+#if (sizeof(struct pcn_kmsg_message) % CACHE_LINE_SIZE != 0)
+ #error "pcn_kmsg_message is not a multiple of cacheline size"
+#endif
 
 struct pcn_kmsg_reverse_message {
 	unsigned char payload[PCN_KMSG_PAYLOAD_SIZE];
@@ -173,6 +185,9 @@ struct pcn_kmsg_reverse_message {
 	volatile unsigned long last_ticket;
 	volatile unsigned char ready;
 }__attribute__((packed)) __attribute__((aligned(CACHE_LINE_SIZE)));
+#if (sizeof(struct pcn_kmsg_reverse_message) % CACHE_LINE_SIZE != 0)
+ #error "pcn_kmsg_message is not a multiple of cacheline size"
+#endif
 
 /* Struct for sending long messages (>60 bytes payload) */
 struct pcn_kmsg_long_message {
@@ -187,22 +202,35 @@ struct pcn_kmsg_container {
 }__attribute__((packed));
 
 
-
+/*****************************************************************************/
 /* TYPES OF MESSAGES */
+/*****************************************************************************/
 
 /* Message struct for guest kernels to check in with each other. */
 struct pcn_kmsg_checkin_message {
 	struct pcn_kmsg_hdr hdr;
 	unsigned long window_phys_addr;
 	unsigned char cpu_to_add;
-	char pad[51];
+#define CHECKIN_PADDING (sizeof(struct pcn_kmsg_hdr) + sizeof(unsigned long) + sizeof(unsigned char))
+	char pad[(CACHE_LINE_SIZE - CHECKIN_PADDING)];
 }__attribute__((packed)) __attribute__((aligned(CACHE_LINE_SIZE)));
 
 
 
+/* RING BUFFER */
+
+#define RB_SHIFT 8
+#define RB_SIZE (1 << RB_SHIFT)
+#define RB_MASK ((1 << RB_SHIFT) - 1)
+#if (RB_SIZE > LG_SEQNUM_SIZE)
+#warning "there are more buffers than chuncks"
+#elif (RB_SIZE > LG_SEQNUM_SIZE)
+#warning "there are more chuncks than buffer"
+#endif
+
 /* WINDOW / BUFFERING */
 
-#define PCN_KMSG_RBUF_SIZE 256
+#define PCN_KMSG_RBUF_SIZE (RB_SIZE)
 
 struct pcn_kmsg_window {
 	volatile unsigned long head;

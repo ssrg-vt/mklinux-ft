@@ -25,20 +25,18 @@
 #include <asm/atomic.h>
 #include <linux/delay.h>
 
-#define LOGLEN 4
-#define LOGCALL 32
+/*****************************************************************************/
+/* Debugging Macros */
+/*****************************************************************************/
 
 #define KMSG_VERBOSE 0
-
 #if KMSG_VERBOSE
 #define KMSG_PRINTK(fmt, args...) printk("%s: " fmt, __func__, ##args)
 #else
 #define KMSG_PRINTK(...) ;
 #endif
 
-
 #define MCAST_VERBOSE 0
-
 #if MCAST_VERBOSE
 #define MCAST_PRINTK(fmt, args...) printk("%s: " fmt, __func__, ##args)
 #else
@@ -46,8 +44,20 @@
 #endif
 
 #define KMSG_INIT(fmt, args...) printk("KMSG INIT: %s: " fmt, __func__, ##args)
-
 #define KMSG_ERR(fmt, args...) printk("%s: ERROR: " fmt, __func__, ##args)
+
+#define PCN_DEBUG(...) ;
+//#define PCN_WARN(...) printk(__VA_ARGS__)
+#define PCN_WARN(...) ;
+#define PCN_ERROR(...) printk(__VA_ARGS__)
+
+/*****************************************************************************/
+/* Logging Macros */
+/*****************************************************************************/
+
+#define LOGLEN 4
+#define LOGCALL 32
+
 
 #define ROUND_PAGES(size) ((size/PAGE_SIZE) + ((size%PAGE_SIZE)? 1:0))
 #define ROUND_PAGE_SIZE(size) (ROUND_PAGES(size)*PAGE_SIZE)
@@ -88,16 +98,6 @@ static void pcn_kmsg_action(/*struct softirq_action *h*/struct work_struct* work
 struct workqueue_struct *kmsg_wq;
 struct workqueue_struct *messaging_wq;
 
-/* RING BUFFER */
-
-#define RB_SHIFT 6
-#define RB_SIZE (1 << RB_SHIFT)
-#define RB_MASK ((1 << RB_SHIFT) - 1)
-
-#define PCN_DEBUG(...) ;
-//#define PCN_WARN(...) printk(__VA_ARGS__)
-#define PCN_WARN(...) ;
-#define PCN_ERROR(...) printk(__VA_ARGS__)
 
 unsigned long long total_sleep_win_put = 0;
 unsigned int sleep_win_put_count = 0;
@@ -130,6 +130,7 @@ static inline unsigned long win_inuse(struct pcn_kmsg_window *win)
 {
 	return win->head - win->tail;
 }
+
 static long unsigned int msg_put=0;
 static inline int win_put(struct pcn_kmsg_window *win, 
 			  struct pcn_kmsg_message *msg,
@@ -240,8 +241,6 @@ static inline int win_get(struct pcn_kmsg_window *win,
 
 	*msg = rcvd;	
 msg_get++;
-
-
 
 	return 0;
 }
@@ -473,22 +472,23 @@ static int do_checkin(void)
 	return rc;
 }
 
+int max_msg_put = 0;
 static int pcn_read_proc(char *page, char **start, off_t off, int count, int *eof, void *data)
 {
 	char *p= page;
     int len, i, idx;
 
-    p += sprintf(p, "Sleep in win_put[total,count,avg] = [%llx,%lx,%llx]\n",
+    p += sprintf(p, "Sleep win_put[total,count,avg]=[%llx,%lx,%llx]\n",
                     total_sleep_win_put,
                     sleep_win_put_count,
                     sleep_win_put_count? total_sleep_win_put/sleep_win_put_count:0);
-    p += sprintf(p, "Sleep in win_get[total,count,avg] = [%llx,%lx,%llx]\n",
+    p += sprintf(p, "Sleep win_get[total,count,avg]=[%llx,%lx,%llx]\n",
                     total_sleep_win_get,
                     sleep_win_get_count,
                     sleep_win_get_count? total_sleep_win_get/sleep_win_get_count:0);
 
-	p += sprintf(p, "messages get: %ld\n", msg_get);
-        p += sprintf(p, "messages put: %ld\n", msg_put);
+	p += sprintf(p, "msg get:%ld len:%ld\n", msg_get, max_msg_len);
+    p += sprintf(p, "msg put:%ld\n", msg_put, );
 
     idx = log_r_index;
     for (i =0; i>-LOGLEN; i--)
@@ -505,17 +505,17 @@ static int pcn_read_proc(char *page, char **start, off_t off, int count, int *eo
     			(int) log_send[(idx+i)%LOGLEN].lg_end, (int) log_send[(idx+i)%LOGLEN].lg_seqnum );
 
     idx = log_f_index;
-        for (i =0; i>-LOGCALL; i--)
-        	p +=sprintf (p,"f%d: %pB\n",
+    for (i =0; i>-LOGCALL; i--)
+        p +=sprintf (p,"f%d: %pB\n",
         			(idx+i),(void*) log_function_called[(idx+i)%LOGCALL] );
 
     idx = log_f_sendindex;
-    	for (i =0; i>-LOGCALL; i--)
-           	p +=sprintf (p,"[s%d]->: %pB\n",
+    for (i =0; i>-LOGCALL; i--)
+        p +=sprintf (p,"[s%d]->: %pB\n",
            			(idx+i),(void*) log_function_send[(idx+i)%LOGCALL] );
 
-        for(i=0; i<PCN_KMSG_RBUF_SIZE; i++)
-        	p +=sprintf (p,"second_buffer[%i]=%i\n",i,rkvirt[my_cpu]->second_buffer[i]);
+    for(i=0; i<PCN_KMSG_RBUF_SIZE; i++)
+    	p +=sprintf (p,"second_buffer[%i]=%i\n",i,rkvirt[my_cpu]->second_buffer[i]);
 
 
 	len = (p -page) - off;
@@ -910,6 +910,9 @@ int pcn_kmsg_send_long(unsigned int dest_cpu,
 
 	KMSG_PRINTK("Sending large message to CPU %d, type %d, payload size %d bytes, %d chunks\n", 
 		    dest_cpu, lmsg->hdr.type, payload_size, num_chunks);
+
+	if (payload_size > max_msg_put)
+		max_msg_put = payload_size;
 
 	this_chunk.hdr.type = lmsg->hdr.type;
 	this_chunk.hdr.prio = lmsg->hdr.prio;
