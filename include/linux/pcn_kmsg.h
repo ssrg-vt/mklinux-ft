@@ -115,9 +115,10 @@ PCN_KMSG_TYPE_REMOTE_PROC_CPUINFO_RESPONSE,
 PCN_KMSG_TYPE_REMOTE_PROC_CPUINFO_REQUEST,
 	PCN_KMSG_TYPE_MAX
 };
-#if (PCN_KMSG_TYPE_MAX > ((1<<8) -1))
+#define __PCN_KMSG_TYPE_MAX PCN_KMSG_TYPE_MAX
+/*#if (__PCN_KMSG_TYPE_MAX > ((1<<8) -1))
  #error "The current messaging layer don't support that many message types"
-#endif
+#endif */
 
 /* Enum for message priority. */
 enum pcn_kmsg_prio {
@@ -144,14 +145,14 @@ struct pcn_kmsg_hdr {
 	unsigned int lg_seqnum 	:LG_SEQNUM_SIZE; // b11 .. b12
 	unsigned int __ready	:__READY_SIZE;
 }__attribute__((packed));
-#if (((sizeof(struct pcn_kmsg_hdr)*8) - 24 - sizeof(unsigned long) - __READY_SIZE) != LG_SEQNUM_SIZE)
+/*#if (((sizeof(struct pcn_kmsg_hdr)*8) - 24 - sizeof(unsigned long) - __READY_SIZE) != LG_SEQNUM_SIZE)
  #error "LG_SEQNUM_SIZE is not correctly sized"
-#endif
+#endif */
 
 //#if ( &((struct pcn_kmsg_hdr*)0)->ready != 12 )
-#if ( sizeof(struct pcn_kmsg_hdr) != 12 )
+/*#if ( sizeof(struct pcn_kmsg_hdr) != 12 )
  #error "pcn_kmsg_hdr is not 12 bytes"
-#endif
+#endif */
 
 // TODO cache size can be retrieved by the compiler, put it here
 // I do not know how it is possible that cache line is 128
@@ -175,9 +176,9 @@ struct pcn_kmsg_message {
 	struct pcn_kmsg_hdr hdr;
 	unsigned char payload[PCN_KMSG_PAYLOAD_SIZE];
 }__attribute__((packed)) __attribute__((aligned(CACHE_LINE_SIZE)));
-#if (sizeof(struct pcn_kmsg_message) % CACHE_LINE_SIZE != 0)
+/*#if (sizeof(struct pcn_kmsg_message) % CACHE_LINE_SIZE != 0)
  #error "pcn_kmsg_message is not a multiple of cacheline size"
-#endif
+#endif */
 
 struct pcn_kmsg_reverse_message {
 	unsigned char payload[PCN_KMSG_PAYLOAD_SIZE];
@@ -185,9 +186,9 @@ struct pcn_kmsg_reverse_message {
 	volatile unsigned long last_ticket;
 	volatile unsigned char ready;
 }__attribute__((packed)) __attribute__((aligned(CACHE_LINE_SIZE)));
-#if (sizeof(struct pcn_kmsg_reverse_message) % CACHE_LINE_SIZE != 0)
+/*#if (sizeof(struct pcn_kmsg_reverse_message) % CACHE_LINE_SIZE != 0)
  #error "pcn_kmsg_message is not a multiple of cacheline size"
-#endif
+#endif */
 
 /* Struct for sending long messages (>60 bytes payload) */
 struct pcn_kmsg_long_message {

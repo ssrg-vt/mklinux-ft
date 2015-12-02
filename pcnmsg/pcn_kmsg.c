@@ -487,8 +487,8 @@ static int pcn_read_proc(char *page, char **start, off_t off, int count, int *eo
                     sleep_win_get_count,
                     sleep_win_get_count? total_sleep_win_get/sleep_win_get_count:0);
 
-	p += sprintf(p, "msg get:%ld len:%ld\n", msg_get, max_msg_len);
-    p += sprintf(p, "msg put:%ld\n", msg_put, );
+    p += sprintf(p, "msg get:%ld\n", msg_get);
+    p += sprintf(p, "msg put:%ld len:%ld\n", msg_put, max_msg_put);
 
     idx = log_r_index;
     for (i =0; i>-LOGLEN; i--)
@@ -532,8 +532,32 @@ static int __init pcn_kmsg_init(void)
 	unsigned long win_phys_addr, rkinfo_phys_addr;
 	struct pcn_kmsg_window *win_virt_addr;
 	struct boot_params *boot_params_va;
+	int bug=0;
 
-	KMSG_INIT("entered\n");
+	if ( __PCN_KMSG_TYPE_MAX > ((1<<8) -1) ) {
+		printk(KERN_ALERT"%s: __PCN_KMSG_TYPE_MAX=%ld too big.\n",
+			__func__, (unsigned long) __PCN_KMSG_TYPE_MAX);
+		bug++;
+	}
+	if ( (((sizeof(struct pcn_kmsg_hdr)*8) - 24 - sizeof(unsigned long) - __READY_SIZE) != LG_SEQNUM_SIZE) ) {
+		printk(KERN_ALERT"%s: LG_SEQNUM_SIZE=%ld is not correctly sized, should be %ld.\n",
+			__func__, (unsigned long) LG_SEQNUM_SIZE,
+			(unsigned long)((sizeof(struct pcn_kmsg_hdr)*8) - 24 - sizeof(unsigned long) - __READY_SIZE));
+		bug++;
+	}
+	if ( (sizeof(struct pcn_kmsg_message) % CACHE_LINE_SIZE != 0) ) {
+		printk(KERN_ALERT"%s: sizeof(struct pcn_kmsg_message)=%ld is not a multiple of cacheline size.\n",
+			__func__, (unsigned long)sizeof(struct pcn_kmsg_message));
+		bug++;
+	}
+        if ( (sizeof(struct pcn_kmsg_reverse_message) % CACHE_LINE_SIZE != 0) ) {
+                printk(KERN_ALERT"%s: sizeof(struct pcn_kmsg_reverse_message)=%ld is not a multiple of cacheline size.\n",
+                        __func__, (unsigned long)sizeof(struct pcn_kmsg_reverse_message));
+                bug++;
+        }
+	BUG_ON((bug>0));
+
+	KMSG_INIT("%s: entered\n", __func__);
 
 	my_cpu = raw_smp_processor_id();
 	
