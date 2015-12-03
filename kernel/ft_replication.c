@@ -767,9 +767,11 @@ char* print_ft_pid(struct ft_pid* pid){
 	if(!pid)
 		return NULL;
 
-	string= kmalloc(size, GFP_ATOMIC);
+	string= kmalloc(size, GFP_NOWAIT | GFP_ATOMIC);
 	if(!string)
 		return NULL;
+
+	memset(string, 0, size);
 
 	pos= snprintf(string, size,"{ ft_pop_rep_id: {kernel %d, id %d}, level: %d", pid->ft_pop_id.kernel, pid->ft_pop_id.id, pid->level);
 	if(pos>=size)

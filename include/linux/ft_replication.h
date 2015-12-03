@@ -254,6 +254,7 @@ int send_zero_window_in_filters(void);
 struct tcp_request_sock;
 
 int create_filter(struct task_struct *task, struct sock *sk, gfp_t priority);
+void ft_listen_init(struct sock* sk);
 //int create_filter_accept(struct task_struct *task, struct socket *newsock,struct socket *sock);
 void ft_grown_mini_filter(struct sock* sk, struct request_sock *req);
 int ft_create_mini_filter(struct request_sock *req, struct sock *sk, struct sk_buff *skb);

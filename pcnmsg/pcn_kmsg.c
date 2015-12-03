@@ -555,7 +555,7 @@ static int __init pcn_kmsg_init(void)
                         __func__, (unsigned long)sizeof(struct pcn_kmsg_reverse_message));
                 bug++;
         }
-	BUG_ON((bug>0));
+	BUG_ON((bug>1));
 
 	KMSG_INIT("%s: entered\n", __func__);
 

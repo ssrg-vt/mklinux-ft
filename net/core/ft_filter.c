@@ -180,13 +180,14 @@ struct handshake_work{
 	int completed;
 };
 
+//number of working queues used to dispatch pckts forwarded by primary replica. NOTE: there will be a special listening queue in addition to PCKT_DISP_POOL_SIZE to just handling handshakes.
 #define PCKT_DISP_POOL_SIZE 10
-#define WQ_NAME_PREFIX ft_wq_
+#define WQ_NAME_PREFIX "ft_wq_"
 #define WQ_NAME_SIZE 20
-char workqueue_name[PCKT_DISP_POOL_SIZE][WQ_NAME_SIZE];
-static struct workqueue_struct *pckt_dispatcher_pool[PCKT_DISP_POOL_SIZE];
-static spinlock_t pckt_dispatcher_pool_lock_wq[PCKT_DISP_POOL_SIZE];
-static struct list_head pending_handshake[PCKT_DISP_POOL_SIZE];
+char workqueue_name[(PCKT_DISP_POOL_SIZE+1)][WQ_NAME_SIZE];
+static struct workqueue_struct *pckt_dispatcher_pool[(PCKT_DISP_POOL_SIZE+1)];
+static spinlock_t pending_handshake_lock;
+static struct list_head pending_handshake;
 extern const char* get_wq_name(struct workqueue_struct *wq);
 
 DEFINE_SPINLOCK(pckt_dispatcher_pool_lock);
@@ -206,7 +207,7 @@ static int create_pckt_dispatcher_pool(void){
 	next_pckt_dispatcher= 0;
 
 	for(i=0; i<PCKT_DISP_POOL_SIZE; i++){
-		ret= snprintf(workqueue_name[i], WQ_NAME_SIZE, "WQ_NAME_PREFIX_%d", i);
+		ret= snprintf(workqueue_name[i], WQ_NAME_SIZE, WQ_NAME_PREFIX"_%d", i);
                 if(ret==WQ_NAME_SIZE){
                         printk("%s ERROR: name field too small\n", __func__);
                         return -EFAULT;
@@ -215,51 +216,57 @@ static int create_pckt_dispatcher_pool(void){
                 wq= create_singlethread_workqueue(workqueue_name[i]);
                 if(wq){
 			pckt_dispatcher_pool[i]= wq;
-			INIT_LIST_HEAD(&pending_handshake[i]);
-			spin_lock_init(&pckt_dispatcher_pool_lock_wq[i]);
 		}
 		else
 			return -EFAULT;
 	}
 	
+	//special queue for listening sockets...
+	ret= snprintf(workqueue_name[i], WQ_NAME_SIZE, WQ_NAME_PREFIX"_listen");
+	if(ret==WQ_NAME_SIZE){
+		printk("%s ERROR: name field too small\n", __func__);
+		return -EFAULT;
+	}
+
+	wq= alloc_workqueue(workqueue_name[i], WQ_UNBOUND | WQ_MEM_RECLAIM | WQ_HIGHPRI, 1);
+	if(wq){
+		pckt_dispatcher_pool[PCKT_DISP_POOL_SIZE]= wq;
+		INIT_LIST_HEAD(&pending_handshake);
+		spin_lock_init(&pending_handshake_lock);
+	}
+	else{
+		return -EFAULT;
+	}
+
 	
 	return 0;
 }
 
-static void remove_handshake_work(struct handshake_work* work, const char* wq_name){
-	int id;
+static void remove_handshake_work(struct handshake_work* work){
 
-	sscanf(wq_name,"WQ_NAME_PREFIX_%d",&id);
-
-        spin_lock_bh(&pckt_dispatcher_pool_lock_wq[id]);
+        spin_lock_bh(&pending_handshake_lock);
 	list_del(&work->list_member);
-	spin_unlock_bh(&pckt_dispatcher_pool_lock_wq[id]);
+	spin_unlock_bh(&pending_handshake_lock);
 
 }
 
-static void add_handshake_work(struct handshake_work* new_work, const char* wq_name){
-	int id;
+static void add_handshake_work(struct handshake_work* new_work){
 	struct list_head *head;
 
-	sscanf(wq_name,"WQ_NAME_PREFIX_%d",&id);
-	
-	spin_lock_bh(&pckt_dispatcher_pool_lock_wq[id]);
-	head= &pending_handshake[id];
+	spin_lock_bh(&pending_handshake_lock);
+	head= &pending_handshake;
 	list_add(&new_work->list_member, head);
-	spin_unlock_bh(&pckt_dispatcher_pool_lock_wq[id]);
+	spin_unlock_bh(&pending_handshake_lock);
 }
 
-static struct handshake_work* get_handshake_work(__be32 source, __be16 port, const char* wq_name){
-	int id;
+static struct handshake_work* get_handshake_work(__be32 source, __be16 port){
 	struct handshake_work* ret= NULL;
 	struct list_head *head;
         struct list_head *iter= NULL;
 	struct handshake_work* objPtr= NULL;
 	
-	sscanf(wq_name,"WQ_NAME_PREFIX_%d", &id);
-
-	spin_lock_bh(&pckt_dispatcher_pool_lock_wq[id]);
-	head= &pending_handshake[id];
+	spin_lock_bh(&pending_handshake_lock);
+	head= &pending_handshake;
 	if(!list_empty(head)){
 		
         	list_for_each(iter, head) {
@@ -272,7 +279,7 @@ static struct handshake_work* get_handshake_work(__be32 source, __be16 port, con
 	}
 
 out:
-	spin_unlock_bh(&pckt_dispatcher_pool_lock_wq[id]);
+	spin_unlock_bh(&pending_handshake_lock);
 	return ret;
 	
 }
@@ -1366,11 +1373,11 @@ static void release_filter(struct kref *kref){
                 if(filter_printed)
                         kfree(filter_printed);
 #endif
-                /*char* filter_printed= print_filter_id(filter);
+                char* filter_printed= print_filter_id(filter);
                 printk("%s: deleting %s filter %s pckt rcv %lld pckt snt %lld\n", __func__, (filter->type & FT_FILTER_FAKE)?"fake":"", filter_printed, filter->local_rx, filter->local_tx);
 
 		if(filter_printed)
-                        kfree(filter_printed);*/
+                        kfree(filter_printed);
 		if(filter->ft_popcorn)
 			put_ft_pop_rep(filter->ft_popcorn);
 		if(filter->wait_queue)
@@ -1386,7 +1393,7 @@ static void release_filter(struct kref *kref){
 }
 
 void get_ft_filter(struct net_filter_info* filter){
-	printk("get daddr %u dport %u from %pS %pS\n", filter->tcp_param.daddr, ntohs(filter->tcp_param.dport), __builtin_return_address(0), __builtin_return_address(1));	
+	//printk("get daddr %u dport %u from %pS %pS pid %d\n", filter->tcp_param.daddr, ntohs(filter->tcp_param.dport), __builtin_return_address(0), __builtin_return_address(1), current->pid);	
 	kref_get(&filter->kref);
 }
 
@@ -1394,7 +1401,10 @@ void get_ft_filter(struct net_filter_info* filter){
  *Never call this function while holding that lock.
  */
 void put_ft_filter(struct net_filter_info* filter){
-	printk("put daddr %u dport %u from %pS\n", filter->tcp_param.daddr, ntohs(filter->tcp_param.dport), __builtin_return_address(0));
+	/*if( __builtin_return_address(1) == sk_free+0x25){
+		printk("put daddr %u dport %u from %pS %pS %pS %pS %pS pid %d\n", filter->tcp_param.daddr, ntohs(filter->tcp_param.dport), __builtin_return_address(0), __builtin_return_address(1), __builtin_return_address(2), __builtin_return_address(3), __builtin_return_address(4), current->pid);
+		dump_stack();
+	}*/
 	kref_put(&filter->kref, release_filter);
 }
 
@@ -1621,9 +1631,11 @@ char* print_filter_id(struct net_filter_info *filter){
 	if(!creator_printed)
 		return NULL;
 
-        string= kmalloc(size,GFP_ATOMIC);
+        string= kmalloc(size, GFP_NOWAIT | GFP_ATOMIC);
         if(!string)
                 return NULL;
+	
+	memset(string, 0, size);
 	
 	rsize= size;
         ret= snprintf(string, rsize, "{ creator: %s, id %d", creator_printed, filter->id);
@@ -1816,7 +1828,7 @@ int ft_create_mini_filter(struct request_sock *req, struct sock *sk, struct sk_b
 		}
 
 		if(parent_filter->type & FT_FILTER_PRIMARY_AFTER_SECONDARY_REPLICA){
-			hand_work= get_handshake_work(daddr, dport, get_wq_name(parent_filter->rx_copy_wq));
+			hand_work= get_handshake_work(daddr, dport);
                 	if(hand_work && hand_work->completed == 1){
 				//the filter will be FT_FILTER_PRIMARY_AFTER_SECONDARY_REPLICA
                 		err= init_filter_common(filter, 0);
@@ -1863,7 +1875,7 @@ int ft_create_mini_filter(struct request_sock *req, struct sock *sk, struct sk_b
 				//create the mini-socket as PRIMARY, nothing can be pending
 
                                 if(hand_work && hand_work->completed == 1){
-					remove_handshake_work(hand_work, get_wq_name(parent_filter->rx_copy_wq));
+					remove_handshake_work(hand_work);
 				}
 				else{
 	                        	filter->type &= ~FT_FILTER_PRIMARY_AFTER_SECONDARY_REPLICA;
@@ -2731,7 +2743,7 @@ static int try_complete_handshake_seq(struct sk_buff *skb, struct net_filter_inf
 	ack= tcp_header->ack;
  	size= tcp_header->syn+ tcp_header->fin+ skb->len- tcp_header->doff*4;
 
-        hand_work= get_handshake_work(source, port, get_wq_name(filter->rx_copy_wq));
+        hand_work= get_handshake_work(source, port);
 
 	if(hand_work && !hand_work->completed){
          	if(!hand_work->syn || hand_work->ack || syn || !ack){
@@ -2816,6 +2828,10 @@ static void create_handshake_seq(struct rx_copy_work *my_work){
 
 	printk("%s called\n", __func__);
 
+	if(filter->rx_copy_wq != pckt_dispatcher_pool[PCKT_DISP_POOL_SIZE]){
+                printk("ERROR %s called with filter wq %s\n", __func__, get_wq_name(filter->rx_copy_wq));
+        }
+
 	skb= create_skb_from_rx_copy_msg(msg, filter);
         if(IS_ERR(skb)){
                 printk("ERROR %s impossible to allocate more skb\n", __func__);
@@ -2832,7 +2848,7 @@ static void create_handshake_seq(struct rx_copy_work *my_work){
 		goto out_no_save;
 	}
 
-	hand_work= get_handshake_work(source, port, get_wq_name(filter->rx_copy_wq));
+	hand_work= get_handshake_work(source, port);
 
 	//NOTE not assuming uncorrect sequence of packts (attact cases)
 	if(hand_work){
@@ -2908,14 +2924,14 @@ static void create_handshake_seq(struct rx_copy_work *my_work){
                          hand_work->ack_seq= seq;
                 }
 
-		add_handshake_work(hand_work, get_wq_name(filter->rx_copy_wq));
+		add_handshake_work(hand_work);
 
 	}
 
 check:
 	if(hand_work->syn && hand_work->ack){
 		if(hand_work->syn_seq+1 == hand_work->ack_seq){
-			remove_handshake_work(hand_work, get_wq_name(filter->rx_copy_wq));
+			remove_handshake_work(hand_work);
 			INIT_WORK((struct work_struct*) hand_work, dispatch_handshake_msg);
 			queue_work(filter->rx_copy_wq, (struct work_struct *) hand_work);	
 		}
@@ -2932,6 +2948,14 @@ out_no_save:
 	return;
 }
 
+void ft_listen_init(struct sock* sk){
+        if(sk->ft_filter){
+                if( sk->ft_filter->type & FT_FILTER_SECONDARY_REPLICA || (sk->ft_filter->type & FT_FILTER_PRIMARY_AFTER_SECONDARY_REPLICA )){
+                        sk->ft_filter->rx_copy_wq = pckt_dispatcher_pool[PCKT_DISP_POOL_SIZE];
+                }
+        }
+}
+
 static void dispatch_copy_msg(struct work_struct* work){
         struct rx_copy_work *my_work= (struct rx_copy_work *) work;
         struct rx_copy_msg *msg= (struct rx_copy_msg *) my_work->data;
@@ -2939,31 +2963,45 @@ static void dispatch_copy_msg(struct work_struct* work){
 	struct sk_buff *skb;
 	char* filter_id_printed;
 	unsigned long time_to_wait;
+	int debug=0;
 
-	if(filter->tcp_param.daddr==0){
-		printk("%s daddr %u dport %u \n", __func__, filter->tcp_param.daddr, ntohs(filter->tcp_param.dport));
-	}
+	/*if(filter->tcp_param.daddr==0){
+		printk("%s daddr %u dport %u pid %d\n", __func__, filter->tcp_param.daddr, ntohs(filter->tcp_param.dport), current->pid);
+		filter_id_printed= print_filter_id(filter);
+                printk("filter %s %s\n", (filter->type & FT_FILTER_FAKE)?"fake":"", filter_id_printed);
+                if(filter_id_printed)
+                        kfree(filter_id_printed);
+		debug=1;
+	}*/
 
-	if(my_work->count > 50 && (my_work->count%50)==0){
+	/*if(my_work->count > 50 && (my_work->count%50)==0){
 		filter_id_printed= print_filter_id(filter);
                 printk("%s: WARNING work count is %d msg->pckt_id %llu primary rx %llu deliver_pckts %d in %s filter %s\n", __func__, my_work->count,  msg->pckt_id, filter->primary_rx, filter->deliver_packets, (filter->type & FT_FILTER_FAKE)?"fake":"", filter_id_printed);
                 if(filter_id_printed)
                 	kfree(filter_id_printed);
 
-	}
+	}*/
 
 again:	spin_lock_bh(&filter->lock);
 
-	if(filter->tcp_param.daddr==0){
-        	printk("after spinlock\n");
-        }
-
 	if(filter->type & FT_FILTER_ENABLE){
-		if(filter->tcp_param.daddr==0){
-			printk("enabled\n");
-		}
+		
 		//collect handshake packets
 		if( !(filter->type & FT_FILTER_FAKE) && filter->ft_sock && filter->ft_sock->sk_state==TCP_LISTEN){
+
+			//if not queue for listening socket change queue
+                        if(filter->rx_copy_wq != pckt_dispatcher_pool[PCKT_DISP_POOL_SIZE]){
+                                filter->rx_copy_wq = pckt_dispatcher_pool[PCKT_DISP_POOL_SIZE];
+                                spin_unlock_bh(&filter->lock);
+
+                                INIT_WORK(work, dispatch_copy_msg);
+                                my_work->data= msg;
+                                my_work->filter= filter;
+                                my_work->count= 0;
+                                queue_work(pckt_dispatcher_pool[PCKT_DISP_POOL_SIZE], work);
+                                return;
+                        }
+
 			spin_unlock_bh(&filter->lock);
 			
 			create_handshake_seq(my_work);
@@ -2976,9 +3014,8 @@ again:	spin_lock_bh(&filter->lock);
 
 		//no way too long, you are an error or your real filter was closed before
 		if(((filter->type & FT_FILTER_FAKE) && my_work->count > 200) || my_work->count > 300){
-
 			filter_id_printed= print_filter_id(filter);
-                	printk("%s: WARNING dropping msg->pckt_id %llu primary rx %llu deliver_pckts %d in %s filter %s\n", __func__, msg->pckt_id, filter->primary_rx, filter->deliver_packets, (filter->type & FT_FILTER_FAKE)?"fake":"", filter_id_printed);
+                	printk("%s: pid %d WARNING dropping msg->pckt_id %llu primary rx %llu deliver_pckts %d in %s filter %s\n", __func__, current->pid, msg->pckt_id, filter->primary_rx, filter->deliver_packets, (filter->type & FT_FILTER_FAKE)?"fake":"", filter_id_printed);
                 	if(filter_id_printed)
                         	kfree(filter_id_printed);
 
@@ -2987,9 +3024,6 @@ again:	spin_lock_bh(&filter->lock);
  
 		if(msg->pckt_id != filter->primary_rx+1){
 
-			if(filter->tcp_param.daddr==0){
-                        	printk("requeing\n");
-                	}
 			//requeue it
                         INIT_DELAYED_WORK( (struct delayed_work *)work, dispatch_copy_msg);
                         my_work->data= (void*) msg;
@@ -3015,9 +3049,6 @@ again:	spin_lock_bh(&filter->lock);
  
 		if(PR_RX_CP_MSG_SLEEP_COND){
            		
-			if(filter->tcp_param.daddr==0){
-                        	printk("condition\n");
-                	}
 			INIT_DELAYED_WORK( (struct delayed_work *)work, dispatch_copy_msg);
                         my_work->data= (void*) msg;
                         my_work->filter= filter;
@@ -4398,7 +4429,7 @@ unsigned int ft_hook_before_tcp_secondary(struct sk_buff *skb, struct net_filter
 
 			/*start closing socket if fin is active*/
                         if(tcp_header->fin){
-
+				//printk("%s fin arrived\n",__func__);
 				if(size && !(size==1)){
 					if(!new_skb){
 						printk("ERROR %s pckt should have been saved on stable buffer with fin without copying it\n", __func__);
@@ -4613,7 +4644,7 @@ unsigned int ft_hook_before_tcp_secondary(struct sk_buff *skb, struct net_filter
 			 tcp_header->check = 0;
                          tcp_header->check= checksum_tcp_rx(skb, skb->len, iph, tcp_header);
 
-			 FTMPRINTK("in one of the fin status seq %u ack seq %u tp rcv next %u\n", ntohl(tcp_header->seq), ntohl(tcp_header->ack_seq), tcp_sk(sk)->rcv_nxt);
+			 FTPRINTK("in one of the fin status seq %u ack seq %u tp rcv next %u\n", ntohl(tcp_header->seq), ntohl(tcp_header->ack_seq), tcp_sk(sk)->rcv_nxt);
 
 			 return NF_ACCEPT;
 			}
@@ -4889,7 +4920,7 @@ unsigned int ft_hook_after_transport_layer_primary_after_secondary(struct net_fi
 			/* If part of handshake completed by the primary drop answer*/
 			if(tcp_header->syn && filter->rx_copy_wq){
 
-        			hand_work= get_handshake_work(iph->daddr, tcp_header->dest, get_wq_name(filter->rx_copy_wq));
+        			hand_work= get_handshake_work(iph->daddr, tcp_header->dest);
 				if(hand_work && hand_work->completed==1){
 					kfree_skb(skb);
 					return NF_STOLEN;
