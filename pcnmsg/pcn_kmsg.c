@@ -514,8 +514,9 @@ static int pcn_read_proc(char *page, char **start, off_t off, int count, int *eo
         p +=sprintf (p,"[s%d]->: %pB\n",
            			(idx+i),(void*) log_function_send[(idx+i)%LOGCALL] );
 
-    for(i=0; i<PCN_KMSG_RBUF_SIZE; i++)
-    	p +=sprintf (p,"second_buffer[%i]=%i\n",i,rkvirt[my_cpu]->second_buffer[i]);
+//    for(i=0; i<PCN_KMSG_RBUF_SIZE; i++)
+    for(i=0; i<((PCN_KMSG_RBUF_SIZE >32) ? 32 : PCN_KMSG_RBUF_SIZE); i++)
+    	p +=sprintf (p,"sb[%i]=%i\n",i,rkvirt[my_cpu]->second_buffer[i]);
 
 
 	len = (p -page) - off;
@@ -657,6 +658,10 @@ static int __init pcn_kmsg_init(void)
 	}
 
 	/* Malloc our own receive buffer and set it up */
+if (ROUND_PAGE_SIZE(sizeof(struct pcn_kmsg_window)) > KMALLOC_MAX_SIZE)
+  printk(KERN_ALERT"%s: The next attempt to allocate memory will fail. Requested=0x%lx, max=0x%lx.\n",
+        __func__, (unsigned long)ROUND_PAGE_SIZE(sizeof(struct pcn_kmsg_window)), (unsigned long)KMALLOC_MAX_SIZE);
+
 	win_virt_addr = kmalloc(ROUND_PAGE_SIZE(sizeof(struct pcn_kmsg_window)), GFP_KERNEL);
 	if (win_virt_addr) {
 		KMSG_INIT("Allocated %ld(%ld) bytes for my win, virt addr 0x%p\n", 

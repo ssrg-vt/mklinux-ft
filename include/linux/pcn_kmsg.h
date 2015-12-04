@@ -223,9 +223,9 @@ struct pcn_kmsg_checkin_message {
 #define RB_SHIFT 13
 #define RB_SIZE (1 << RB_SHIFT)
 #define RB_MASK ((1 << RB_SHIFT) - 1)
-#if (RB_SIZE > LG_SEQNUM_SIZE)
+#if (RB_SHIFT > LG_SEQNUM_SIZE)
 #warning "there are more buffers than chuncks"
-#elif (RB_SIZE > LG_SEQNUM_SIZE)
+#elif (RB_SHIFT > LG_SEQNUM_SIZE)
 #warning "there are more chuncks than buffer"
 #endif
 
