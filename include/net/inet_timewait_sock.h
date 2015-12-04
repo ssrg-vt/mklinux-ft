@@ -28,6 +28,7 @@
 #include <net/timewait_sock.h>
 
 #include <linux/atomic.h>
+#include <linux/ft_replication.h>
 
 struct inet_hashinfo;
 
@@ -132,6 +133,10 @@ struct inet_timewait_sock {
 	unsigned long		tw_ttd;
 	struct inet_bind_bucket	*tw_tb;
 	struct hlist_node	tw_death_node;
+
+#ifdef FT_POPCORN
+	struct net_filter_info*         ft_filter;
+#endif
 };
 #define tw_tclass tw_tos
 
