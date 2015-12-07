@@ -658,7 +658,7 @@ static int sched_rt_runtime_exceeded(struct rt_rq *rt_rq)
 
 	if (rt_rq->rt_time > runtime) {
 		rt_rq->rt_throttled = 1;
-		printk_once(KERN_WARNING "sched: RT throttling activated\n");
+		printk_once(KERN_WARNING "sched: RT throttling activated current pid %d\n", current->pid);
 		if (rt_rq_throttled(rt_rq)) {
 			sched_rt_rq_dequeue(rt_rq);
 			return 1;

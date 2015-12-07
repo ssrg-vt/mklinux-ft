@@ -1498,6 +1498,10 @@ SYSCALL_DEFINE2(listen, int, fd, int, backlog)
 		if (!err)
 			err = sock->ops->listen(sock, backlog);
 
+#ifdef FT_POPCORN
+                ft_listen_init(sock->sk);
+#endif
+
 		fput_light(sock->file, fput_needed);
 	}
 	return err;

@@ -372,8 +372,16 @@ void tcp_time_wait(struct sock *sk, int state, int timeo)
 		} while (0);
 #endif
 
+#ifdef FT_POPCORN
+                ft_change_to_time_wait_filter(sk, tw);
+#endif
 		/* Linkage updates. */
 		__inet_twsk_hashdance(tw, sk, &tcp_hashinfo);
+
+		
+#ifdef FT_POPCORN
+                ft_deactivate_sk_after_time_wait_filter(tw);
+#endif
 
 		/* Get the TIME_WAIT timeout firing. */
 		if (timeo < rto)

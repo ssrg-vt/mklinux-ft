@@ -147,6 +147,8 @@ struct stable_buffer;
 struct send_buffer;
 struct iovec;
 struct request_sock;
+struct inet_timewait_sock;
+
 /* struct used for networking filter on ft-popcorn.
  * 
  * If replicated, each socket will have its own reference to a filter
@@ -162,7 +164,8 @@ struct net_filter_info{
 	struct ft_pop_rep* ft_popcorn;
 	struct sock* ft_sock;
 	struct request_sock* ft_req; //to use only if it is still a minisocket at the place of ft_sock
-	
+	struct inet_timewait_sock* ft_time_wait; //to use only when in TCP_TIME_WAIT and struct sock is beeing substituted by a struct inet_timewait_sock	
+
 	/* NOTE creator and id compose the identifier.
 	 * correspondig sockets between kernels will have the same 
 	 * idetifier.
@@ -254,9 +257,12 @@ int send_zero_window_in_filters(void);
 struct tcp_request_sock;
 
 int create_filter(struct task_struct *task, struct sock *sk, gfp_t priority);
+void ft_listen_init(struct sock* sk);
 //int create_filter_accept(struct task_struct *task, struct socket *newsock,struct socket *sock);
 void ft_grown_mini_filter(struct sock* sk, struct request_sock *req);
 int ft_create_mini_filter(struct request_sock *req, struct sock *sk, struct sk_buff *skb);
+void ft_change_to_time_wait_filter(struct sock *sk, struct inet_timewait_sock *tw);
+void ft_deactivate_sk_after_time_wait_filter(struct inet_timewait_sock *tw);
 void ft_check_tcp_init_param(struct net_filter_info* filter, struct sock* sk, struct request_sock *req);
 int ft_check_tcp_timestamp(struct sock* sk);
 void ft_activate_grown_filter(struct net_filter_info* filter);

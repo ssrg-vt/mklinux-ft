@@ -106,6 +106,13 @@ static noinline void inet_twsk_free(struct inet_timewait_sock *tw)
 #ifdef SOCK_REFCNT_DEBUG
 	pr_debug("%s timewait_sock %p released\n", tw->tw_prot->name, tw);
 #endif
+
+#ifdef FT_POPCORN
+	if(tw->ft_filter){
+		put_ft_filter(tw->ft_filter);
+		tw->ft_filter= NULL;
+	}
+#endif
 	release_net(twsk_net(tw));
 	kmem_cache_free(tw->tw_prot->twsk_prot->twsk_slab, tw);
 	module_put(owner);
@@ -205,6 +212,10 @@ struct inet_timewait_sock *inet_twsk_alloc(const struct sock *sk, const int stat
 		atomic_set(&tw->tw_refcnt, 0);
 		inet_twsk_dead_node_init(tw);
 		__module_get(tw->tw_prot->owner);
+
+#ifdef FT_POPCORN
+		tw->ft_filter= NULL;
+#endif
 	}
 
 	return tw;

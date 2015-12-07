@@ -283,9 +283,6 @@ struct sock {
 
 	struct sk_filter __rcu	*sk_filter;
 	struct socket_wq __rcu	*sk_wq;
-#ifdef FT_POPCORN
-        struct net_filter_info *ft_filter;
-#endif
 
 #ifdef CONFIG_NET_DMA
 	struct sk_buff_head	sk_async_wait_queue;
@@ -342,6 +339,10 @@ struct sock {
 #endif
 	__u32			sk_mark;
 	u32			sk_classid;
+#ifdef FT_POPCORN
+        struct net_filter_info *ft_filter;
+#endif
+
 	void			(*sk_state_change)(struct sock *sk);
 	void			(*sk_data_ready)(struct sock *sk, int bytes);
 	void			(*sk_write_space)(struct sock *sk);
