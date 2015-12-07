@@ -23,36 +23,14 @@
 #include <asm/bootparam.h>
 #include <asm/errno.h>
 #include <asm/atomic.h>
+
 #include <linux/delay.h>
+#include <linux/timer.h>
+
+#include "kmsg_core.h"
 
 /*****************************************************************************/
-/* Debugging Macros */
-/*****************************************************************************/
-
-#define KMSG_VERBOSE 0
-#if KMSG_VERBOSE
-#define KMSG_PRINTK(fmt, args...) printk("%s: " fmt, __func__, ##args)
-#else
-#define KMSG_PRINTK(...) ;
-#endif
-
-#define MCAST_VERBOSE 0
-#if MCAST_VERBOSE
-#define MCAST_PRINTK(fmt, args...) printk("%s: " fmt, __func__, ##args)
-#else
-#define MCAST_PRINTK(...) ;
-#endif
-
-#define KMSG_INIT(fmt, args...) printk("KMSG INIT: %s: " fmt, __func__, ##args)
-#define KMSG_ERR(fmt, args...) printk("%s: ERROR: " fmt, __func__, ##args)
-
-#define PCN_DEBUG(...) ;
-//#define PCN_WARN(...) printk(__VA_ARGS__)
-#define PCN_WARN(...) ;
-#define PCN_ERROR(...) printk(__VA_ARGS__)
-
-/*****************************************************************************/
-/* Logging Macros */
+/* Logging Macros and variables */
 /*****************************************************************************/
 
 #define LOGLEN 4
@@ -62,7 +40,32 @@
 #define ROUND_PAGES(size) ((size/PAGE_SIZE) + ((size%PAGE_SIZE)? 1:0))
 #define ROUND_PAGE_SIZE(size) (ROUND_PAGES(size)*PAGE_SIZE)
 
+
+struct pcn_kmsg_hdr log_receive[LOGLEN];
+struct pcn_kmsg_hdr log_send[LOGLEN];
+int log_r_index=0;
+int log_s_index=0;
+
+void * log_function_called[LOGCALL];
+int log_f_index=0;
+int log_f_sendindex=0;
+void * log_function_send[LOGCALL];
+
+/*****************************************************************************/
+/* Statistics */
+/*****************************************************************************/
+
+unsigned long long total_sleep_win_put = 0;
+unsigned int sleep_win_put_count = 0;
+unsigned long long total_sleep_win_get = 0;
+unsigned int sleep_win_get_count = 0;
+
+static long unsigned int msg_put=0;
+static long unsigned msg_get=0;
+
+/*****************************************************************************/
 /* COMMON STATE */
+/*****************************************************************************/
 
 /* table of callback functions for handling each message type */
 pcn_kmsg_cbftn callback_table[PCN_KMSG_TYPE_MAX];
@@ -80,7 +83,8 @@ struct pcn_kmsg_rkinfo *rkinfo;
 /* table with virtual (mapped) addresses for remote kernels' windows,
    one per kernel */
 struct pcn_kmsg_window * rkvirt[POPCORN_MAX_CPUS];
-
+unsigned long rkvirt_timeout[POPCORN_MAX_CPUS];
+unsigned long rkvirt_seq[POPCORN_MAX_CPUS];
 
 /* lists of messages to be processed for each prio */
 struct list_head msglist_hiprio, msglist_normprio;
@@ -98,157 +102,13 @@ static void pcn_kmsg_action(/*struct softirq_action *h*/struct work_struct* work
 struct workqueue_struct *kmsg_wq;
 struct workqueue_struct *messaging_wq;
 
+struct timer_list keepalive_tl;
 
-unsigned long long total_sleep_win_put = 0;
-unsigned int sleep_win_put_count = 0;
-unsigned long long total_sleep_win_get = 0;
-unsigned int sleep_win_get_count = 0;
+/*****************************************************************************/
+/* WINDOWS/BUFFERING */
+/*****************************************************************************/
 
-struct pcn_kmsg_hdr log_receive[LOGLEN];
-struct pcn_kmsg_hdr log_send[LOGLEN];
-int log_r_index=0;
-int log_s_index=0;
 
-void * log_function_called[LOGCALL];
-int log_f_index=0;
-int log_f_sendindex=0;
-void * log_function_send[LOGCALL];
-
-/* From Wikipedia page "Fetch and add", modified to work for u64 */
-static inline unsigned long fetch_and_add(volatile unsigned long * variable, 
-					  unsigned long value)
-{
-	asm volatile( 
-		     "lock; xaddq %%rax, %2;"
-		     :"=a" (value)                   //Output
-		     : "a" (value), "m" (*variable)  //Input
-		     :"memory" );
-	return value;
-}
-
-static inline unsigned long win_inuse(struct pcn_kmsg_window *win) 
-{
-	return win->head - win->tail;
-}
-
-static long unsigned int msg_put=0;
-static inline int win_put(struct pcn_kmsg_window *win, 
-			  struct pcn_kmsg_message *msg,
-			  int no_block) 
-{
-	unsigned long ticket;
-    	unsigned long long sleep_start;
-
-	/* if we can't block and the queue is already really long, 
-	   return EAGAIN */
-	if (no_block && (win_inuse(win) >= RB_SIZE)) {
-		KMSG_PRINTK("window full, caller should try again...\n");
-		return -EAGAIN;
-	}
-
-	/* grab ticket */
-	ticket = fetch_and_add(&win->head, 1);
-	if(ticket >= ULONG_MAX)
-		printk("ERROR threashold ticket reached\n");
-
-	PCN_DEBUG(KERN_ERR "%s: ticket = %lu, head = %lu, tail = %lu\n", 
-		 __func__, ticket, win->head, win->tail);
-
-	KMSG_PRINTK("%s: ticket = %lu, head = %lu, tail = %lu\n",
-			 __func__, ticket, win->head, win->tail);
-
-	who_is_writing= ticket;
-	/* spin until there's a spot free for me */
-	//while (win_inuse(win) >= RB_SIZE) {}
-	//if(ticket>=PCN_KMSG_RBUF_SIZE){
-    sleep_start = native_read_tsc();
-		while((win->buffer[ticket%PCN_KMSG_RBUF_SIZE].last_ticket != ticket-PCN_KMSG_RBUF_SIZE)) {
-			//pcn_cpu_relax();
-			//msleep(1);
-		}
-		while(	win->buffer[ticket%PCN_KMSG_RBUF_SIZE].ready!=0){
-			//pcn_cpu_relax();
-			//msleep(1);
-		}
-    total_sleep_win_put += native_read_tsc() - sleep_start;
-    sleep_win_put_count++;
-	//}
-	/* insert item */
-	memcpy(&win->buffer[ticket%PCN_KMSG_RBUF_SIZE].payload,
-	       &msg->payload, PCN_KMSG_PAYLOAD_SIZE);
-
-	memcpy((void*)&(win->buffer[ticket%PCN_KMSG_RBUF_SIZE].hdr),
-	       (void*)&(msg->hdr), sizeof(struct pcn_kmsg_hdr));
-
-	//log_send[log_s_index%LOGLEN]= win->buffer[ticket & RB_MASK].hdr;
-	memcpy(&(log_send[log_s_index%LOGLEN]),
-		(void*)&(win->buffer[ticket%PCN_KMSG_RBUF_SIZE].hdr),
-		sizeof(struct pcn_kmsg_hdr));
-	log_s_index++;
-
-	win->second_buffer[ticket%PCN_KMSG_RBUF_SIZE]++;
-
-	/* set completed flag */
-	win->buffer[ticket%PCN_KMSG_RBUF_SIZE].ready = 1;
-	wmb();
-	win->buffer[ticket%PCN_KMSG_RBUF_SIZE].last_ticket = ticket;
-
-	who_is_writing=-1;
-
-msg_put++;
-
-	return 0;
-}
-
-static long unsigned msg_get=0;
-static inline int win_get(struct pcn_kmsg_window *win, 
-			  struct pcn_kmsg_reverse_message **msg) 
-{
-	struct pcn_kmsg_reverse_message *rcvd;
-    unsigned long long sleep_start;
-
-	if (!win_inuse(win)) {
-
-		KMSG_PRINTK("nothing in buffer, returning...\n");
-		return -1;
-	}
-
-	KMSG_PRINTK("reached win_get, head %lu, tail %lu\n", 
-		    win->head, win->tail);	
-
-	/* spin until entry.ready at end of cache line is set */
-	rcvd =(struct pcn_kmsg_reverse_message*) &(win->buffer[win->tail % PCN_KMSG_RBUF_SIZE]);
-	//KMSG_PRINTK("%s: Ready bit: %u\n", __func__, rcvd->hdr.ready);
-
-    sleep_start = native_read_tsc();
-	while (!rcvd->ready) {
-
-		//pcn_cpu_relax();
-		//msleep(1);
-
-	}
-    total_sleep_win_get += native_read_tsc() - sleep_start;
-    sleep_win_get_count++;
-
-	// barrier here?
-	pcn_barrier();
-
-	//log_receive[log_r_index%LOGLEN]=rcvd->hdr;
-	memcpy(&(log_receive[log_r_index%LOGLEN]),&(rcvd->hdr),sizeof(struct pcn_kmsg_hdr));
-	log_r_index++;
-
-	//rcvd->hdr.ready = 0;
-
-	*msg = rcvd;	
-msg_get++;
-
-	return 0;
-}
-
-static inline void win_advance_tail(struct pcn_kmsg_window *win) 
-{
-	win->tail++;
-}
 
 /* win_enable_int
  * win_disable_int
@@ -257,37 +117,25 @@ static inline void win_advance_tail(struct pcn_kmsg_window *win)
  * These functions will inhibit senders to send a message while
  * the receiver is processing IPI from any sender.
  */
-static inline void win_enable_int(struct pcn_kmsg_window *win) {
+static inline void win_enable_int(struct pcn_kmsg_window *win) { // this is arch indep
 	        win->int_enabled = 1;
 	        wmb(); // enforce ordering
 }
-static inline void win_disable_int(struct pcn_kmsg_window *win) {
+static inline void win_disable_int(struct pcn_kmsg_window *win) { // this is arch indep
 	        win->int_enabled = 0;
 	        wmb(); // enforce ordering
 }
-static inline unsigned char win_int_enabled(struct pcn_kmsg_window *win) {
+static inline unsigned char win_int_enabled(struct pcn_kmsg_window *win) { // this is arch indep
     		rmb(); //not sure this is required (Antonio)
 	        return win->int_enabled;
 }
 
-static inline int atomic_add_return_sync(int i, atomic_t *v)
-{
-	return i + xadd_sync(&v->counter, i);
-}
-
-static inline int atomic_dec_and_test_sync(atomic_t *v)
-{
-	unsigned char c;
-
-	asm volatile("lock; decl %0; sete %1"
-		     : "+m" (v->counter), "=qm" (c)
-		     : : "memory");
-	return c != 0;
-}
-
-
-
 /* INITIALIZATION */
+
+/*****************************************************************************/
+/* checking procedures */
+/*****************************************************************************/
+
 #ifdef PCN_SUPPORT_MULTICAST
 static int pcn_kmsg_mcast_callback(struct pcn_kmsg_message *message);
 #endif /* PCN_SUPPORT_MULTICAST */
@@ -472,6 +320,113 @@ static int do_checkin(void)
 	return rc;
 }
 
+/* keepalive */
+static const unsigned long tdelay = (HZ * 100)/1000; // every 100ms
+
+static int pcn_kmsg_keepalive_callback(struct pcn_kmsg_message *message)
+{
+	struct pcn_kmsg_keepalive_message *msg =
+		(struct pcn_kmsg_keepalive_message *) message;
+	int from_cpu = msg->hdr.from_cpu;
+	int from_cpu1 = msg->sender;
+	unsigned long seq = msg->sequence_num;
+
+	KMSG_INIT("From CPU %d, type %d, sender %d seq %ld\n",
+		  msg->hdr.from_cpu, msg->hdr.type, from_cpu1, seq);
+
+	if (from_cpu >= POPCORN_MAX_CPUS || from_cpu1 >= POPCORN_MAX_CPUS) {
+		KMSG_ERR("Invalid source CPU %d %d\n", from_cpu, from_cpu1);
+		return -1; // TODO is this correct, no release of the message?!
+	}
+
+	rkvirt_timeout[from_cpu1] = jiffies;
+	rkvirt_seq[from_cpu1] = seq; // TODO maybe we can do some checks on this value
+
+	pcn_kmsg_free_msg(message);
+
+	return 0;
+}
+
+static unsigned long keepalive = 0;
+static int send_keepalive_msg(unsigned int myself, unsigned int remote)
+{
+	int rc;
+	struct pcn_kmsg_keepalive_message msg;
+
+	msg.hdr.type = PCN_KMSG_TYPE_KEEPALIVE;
+	msg.hdr.prio = PCN_KMSG_PRIO_HIGH;
+	msg.sender = myself;
+	msg.sequence_num = keepalive++;
+
+	rc = pcn_kmsg_send(to_cpu, (struct pcn_kmsg_message *) &msg);
+
+	if (rc) {
+		KMSG_ERR("Failed to send keepalive message, rc = %d\n", rc);
+		return rc;
+	}
+
+	return 0;
+}
+
+// TODO at some time we should set a rate - initial idea is that there is a rate if any other kernel realizes
+// that a kernel don't send any beacon for a time superior as twice the rate, we consider the kernel has failed
+// for some reason
+static int do_keepalive(void)
+{
+	int rc = 0;
+	int i;
+
+	for (i = 0; i < POPCORN_MAX_CPUS; i++) {
+		if (i == my_cpu) {
+			continue;
+		}
+
+		if (rkinfo->phys_addr[i]) {
+			if (rkvirt[i]) {
+
+				KMSG_INIT("Sending checkin message to kernel %d\n", i);
+				rc = send_keepalive_msg(my_cpu, i);
+				if (rc) {
+					KMSG_ERR("POPCORN: Keepalive msg failed for CPU %d!\n", i);
+					return rc; // OR continue?
+				}
+			}
+		}
+	}
+
+	return rc;
+}
+
+#define VALIDITY_WIN 2
+void keepalive_timer (unsigned long arg)
+{
+	int i;
+	unsigned long now = jiffies;
+
+	do_keepalive();
+
+	for (i=0; i<POPCORN_MAX_CPUS; i++) {
+		if (i == my_cpu) {
+			continue;
+		}
+
+		if (rkvirt_timeout[i] < (now - tdelay*VALIDITY_WIN)) {
+			KMSG_ERR("POPCORN: Keepalive msg failed for CPU %d! Kernel is dead \n", i);
+			KMSG_ERR("POPCORN: last beacon at %ld, now %ld, validity win %ld\n",
+					rkvirt_timeout[i], now, (now -tdelay*2));
+		}
+		// TODO here we should create a notification mechanism for the upper layers ..
+		// the messaging layer should be able to propagate itself when a connection drops
+	}
+
+	keepalive_tl.expires = jiffies + tdelay;
+	add_timer(&keepalive_tl);
+}
+
+/*****************************************************************************/
+/* General interface and Internal dispatching */
+/*****************************************************************************/
+
 int max_msg_put = 0;
 static int pcn_read_proc(char *page, char **start, off_t off, int count, int *eof, void *data)
 {
@@ -527,36 +482,43 @@ static int pcn_read_proc(char *page, char **start, off_t off, int count, int *eo
 	return len;
 }
 
+static int peers_read_proc(char *page, char **start, off_t off, int count, int *eof, void *data)
+{
+	char *p= page;
+    int len, i, idx;
+
+    // NOTE here we want to list which are the other kernels, then if the upper layers want to know
+    // more about the other kernels they should send further messages?! like kinit from Akshay/Antonio?!
+    // - I think functionalities should be split across layers, therefore here should be minimal, however
+    // further redesign is necessary to support different plug-ins, here we are still too much confined
+    // to the MAX_CPUS idea of multikernel
+    for (i=0; i< POPCORN_MAX_CPUS; i++) {
+    	if (rkinfo[i].active || rkinfo[i].phys_addr) //I am not sure what active is
+    		p += sprintf(p, "kernel %i active %lx phys addr %lx (seq: %ld)\n",
+    		                    i, rkinfo[i].active, rkinfo[i].phys_addr, rkvirt_seq );
+    	if (rkvirt[i])
+    	    p += sprintf(p, "kernel %i mapped at %p (virtual) h:%d t:%d %ld ticks ago. %s\n",
+                    i, rkvirt[i], rkvirt[i]->head, rkvirt[i]->tail,
+					rkvirt_timeout[i], // TODO now
+					(i == my_cpu) ? "THIS_CPU" : "" );
+    }
+
+	len = (p -page) - off;
+	if (len < 0)
+		len = 0;
+	*eof = (len <= count) ? 1 : 0;
+	*start = page + off;
+	return len;
+}
+
 static int __init pcn_kmsg_init(void)
 {
-	int rc,i;
+	int rc,rk, i;
 	unsigned long win_phys_addr, rkinfo_phys_addr;
 	struct pcn_kmsg_window *win_virt_addr;
 	struct boot_params *boot_params_va;
-	int bug=0;
 
-	if ( __PCN_KMSG_TYPE_MAX > ((1<<8) -1) ) {
-		printk(KERN_ALERT"%s: __PCN_KMSG_TYPE_MAX=%ld too big.\n",
-			__func__, (unsigned long) __PCN_KMSG_TYPE_MAX);
-		bug++;
-	}
-	if ( (((sizeof(struct pcn_kmsg_hdr)*8) - 24 - sizeof(unsigned long) - __READY_SIZE) != LG_SEQNUM_SIZE) ) {
-		printk(KERN_ALERT"%s: LG_SEQNUM_SIZE=%ld is not correctly sized, should be %ld.\n",
-			__func__, (unsigned long) LG_SEQNUM_SIZE,
-			(unsigned long)((sizeof(struct pcn_kmsg_hdr)*8) - 24 - sizeof(unsigned long) - __READY_SIZE));
-		bug++;
-	}
-	if ( (sizeof(struct pcn_kmsg_message) % CACHE_LINE_SIZE != 0) ) {
-		printk(KERN_ALERT"%s: sizeof(struct pcn_kmsg_message)=%ld is not a multiple of cacheline size.\n",
-			__func__, (unsigned long)sizeof(struct pcn_kmsg_message));
-		bug++;
-	}
-        if ( (sizeof(struct pcn_kmsg_reverse_message) % CACHE_LINE_SIZE != 0) ) {
-                printk(KERN_ALERT"%s: sizeof(struct pcn_kmsg_reverse_message)=%ld is not a multiple of cacheline size.\n",
-                        __func__, (unsigned long)sizeof(struct pcn_kmsg_reverse_message));
-                bug++;
-        }
-	BUG_ON((bug>1));
+	win_init(); // checks moved to ringBuffer code
 
 	KMSG_INIT("%s: entered\n", __func__);
 
@@ -571,21 +533,31 @@ static int __init pcn_kmsg_init(void)
 	INIT_LIST_HEAD(&msglist_hiprio);
 	INIT_LIST_HEAD(&msglist_normprio);
 
-	/* Clear out large-message receive buffers */
+	/* Clear out large-message receive buffers */ //message reconstruction is done at high level code TODO
 	//memset(&lg_buf, 0, POPCORN_MAX_CPUS * sizeof(unsigned char *));
 	for(i=0; i<POPCORN_MAX_CPUS; i++) {
 		INIT_LIST_HEAD(&(lg_buf[i]));
 	}
 	long_id=0;
 
+	/* initialize logging functions */
+	memset(log_receive,0,sizeof(struct pcn_kmsg_hdr)*LOGLEN);
+	memset(log_send,0,sizeof(struct pcn_kmsg_hdr)*LOGLEN);
+	memset(log_function_called,0,sizeof(void*)*LOGCALL);
+	memset(log_function_send,0,sizeof(void*)*LOGCALL);
 
-	/* Clear callback table and register default callback functions */
+	/* Clear callback table and register default callback functions */ //also callback should be registeresd high level TODO
 	KMSG_INIT("Registering initial callbacks...\n");
 	memset(&callback_table, 0, PCN_KMSG_TYPE_MAX * sizeof(pcn_kmsg_cbftn));
 	rc = pcn_kmsg_register_callback(PCN_KMSG_TYPE_CHECKIN, 
 					&pcn_kmsg_checkin_callback);
 	if (rc) {
 		printk(KERN_ALERT"Failed to register initial kmsg checkin callback!\n");
+	}
+	rk = pcn_kmsg_register_callback(PCN_KMSG_TYPE_KEEPALIVE,
+						&pcn_kmsg_keepalive_callback);
+	if (rk) {
+		printk(KERN_ALERT"Failed to register initial kmsg keepalive callback!\n");
 	}
 
 #ifdef PCN_SUPPORT_MULTICAST
@@ -611,6 +583,9 @@ static int __init pcn_kmsg_init(void)
 		printk("%s: create_workqueue(kmsg_wq) ret 0x%lx ERROR\n",
 			__func__, (unsigned long)kmsg_wq);
 
+/*****************************************************************************/
+/* transport specific initialization  TODO move somewhere else */
+/*****************************************************************************/
 		
 	/* If we're the master kernel, malloc and map the rkinfo structure and 
 	   put its physical address in boot_params; otherwise, get it from the 
@@ -695,18 +670,28 @@ if (ROUND_PAGE_SIZE(sizeof(struct pcn_kmsg_window)) > KMALLOC_MAX_SIZE)
 		}
 	} 
 
-	memset(log_receive,0,sizeof(struct pcn_kmsg_hdr)*LOGLEN);
-	memset(log_send,0,sizeof(struct pcn_kmsg_hdr)*LOGLEN);
-	memset(log_function_called,0,sizeof(void*)*LOGCALL);
-	memset(log_function_send,0,sizeof(void*)*LOGCALL);
+	/* start timer for keepalive functionality */
+	init_timer(&keepalive_tl);
+	keepalive_tl.data = (unsigned long ) data;
+	keepalive_tl.function = keepalive_timer;
+	keepalive_tl.expires = jiffies + tdelay; // TODO tdelay should be in jiffies
+	add_timer(&(keepalive_tl));
+
 	/* if everything is ok create a proc interface */
 	struct proc_dir_entry *res;
 	res = create_proc_entry("pcnmsg", S_IRUGO, NULL);
 	if (!res) {
-		printk(KERN_ALERT"%s: create_proc_entry failed (%p)\n", __func__, res);
+		printk(KERN_ALERT"%s: create_proc_entry pcnmsg failed (%p)\n", __func__, res);
 		return -ENOMEM;
 	}
 	res->read_proc = pcn_read_proc;
+
+	res = create_proc_entry("pcnpeers", S_IRUGO, NULL);
+	if (!res) {
+		printk(KERN_ALERT"%s: create_proc_entry pcnpeers failed (%p)\n", __func__, res);
+		return -ENOMEM;
+	}
+	res->read_proc = peers_read_proc;
 
 	return 0;
 }
@@ -716,9 +701,12 @@ subsys_initcall(pcn_kmsg_init);
 static void wait_for_senders(void);
 
 void pcn_kmsg_exit(void){
+	del_timer_sync(&keepalive_tl);
 	wait_for_senders();
 	destroy_workqueue(messaging_wq);
 	destroy_workqueue(kmsg_wq);
+	remove_proc_entry("pcnmsg", NULL);
+	remove_proc_entry("pcnpeers", NULL);
 	kfree(rkvirt[my_cpu]);
 }
 

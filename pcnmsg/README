@@ -1,0 +1,24 @@
+TODO
+
+Divide into multiple files arch dep and not arch dep two layers:
+ (1) one with the programming interface
+ (2) one with the low level interface (can be plugged to anything) - in this case we provide ring buffer
+     - but why don't provide multiple ring buffers?!
+
+UPPER LAYER:
+generic chunking (any low layer can need chunking/buffering)
+
+LOWER LAYER:
+send an MTU (like the eth board)     
+     
+multiple ring buffers between different kernels 
+
+multicast
+
+kernels as entities
+
+processes (or services) as entity
+
+ticketing and group ticketing - we can do as max chuncks so that
+
+multiple channels: high prio - for the messaging layer itself; normal prio - for any other service 

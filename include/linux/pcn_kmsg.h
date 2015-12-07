@@ -28,6 +28,7 @@ struct pcn_kmsg_mcast_wininfo {
 	unsigned long phys_addr;
 };
 
+// only one allocated by the first kernel?
 struct pcn_kmsg_rkinfo {
 	long active[POPCORN_MAX_CPUS];
 	unsigned long phys_addr[POPCORN_MAX_CPUS];
@@ -59,7 +60,10 @@ enum pcn_kmsg_type {
 	PCN_KMSG_TYPE_TEST,
 	PCN_KMSG_TYPE_TEST_LONG,
 	PCN_KMSG_TYPE_CHECKIN,
+	PCN_KMSG_TYPE_KEEPALIVE,
+#ifdef PCN_SUPPORT_MULTICAST
 	PCN_KMSG_TYPE_MCAST,
+#endif /* PCN_SUPPORT_MULTICAST */
     PCN_KMSG_TYPE_PROC_SRV_CLONE_REQUEST,
     PCN_KMSG_TYPE_PROC_SRV_CREATE_PROCESS_PAIRING,
     PCN_KMSG_TYPE_PROC_SRV_EXIT_PROCESS,
@@ -216,6 +220,13 @@ struct pcn_kmsg_checkin_message {
 	char pad[(CACHE_LINE_SIZE - CHECKIN_PADDING)];
 }__attribute__((packed)) __attribute__((aligned(CACHE_LINE_SIZE)));
 
+struct pcn_kmsg_keepalive_message {
+	struct pcn_kmsg_hdr hdr;
+	unsigned long sequence_num;
+	unsigned char sender ;
+#define CHECKIN_PADDING (sizeof(struct pcn_kmsg_hdr) + sizeof(unsigned long) + sizeof(unsigned char))
+	char pad[(CACHE_LINE_SIZE - CHECKIN_PADDING)];
+}__attribute__((packed)) __attribute__((aligned(CACHE_LINE_SIZE)));
 
 
 /* RING BUFFER */
