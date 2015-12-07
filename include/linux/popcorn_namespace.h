@@ -173,9 +173,8 @@ static inline int update_token(struct popcorn_namespace *ns)
 	struct list_head *iter= NULL;
 	struct task_list *objPtr;
 	struct task_list *new_token = ns->token;
-	int tick_value = 0;
-	// TODO: overflow
-	int min_value = 999999999;
+	uint64_t tick_value = 0;
+	uint64_t min_value = ~0;
 
 	list_for_each(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
@@ -225,9 +224,15 @@ static inline void det_wake_up(struct task_struct *task)
 	ns = task->nsproxy->pop_ns;
 
 	spin_lock_irqsave(&ns->task_list_lock, flags);
-	atomic_set(&task->ft_det_tick, ns->last_tick);
-	update_token(ns);
-	spin_unlock_irqrestore(&ns->task_list_lock, flags);
+
+	if (ns->last_tick > atomic_read(&task->ft_det_tick)) {
+		atomic_set(&task->ft_det_tick, ns->last_tick);
+		update_token(ns);
+		spin_unlock_irqrestore(&ns->task_list_lock, flags);
+	} else {
+		update_token(ns);
+		spin_unlock_irqrestore(&ns->task_list_lock, flags);
+	}
 
 	if (task->ft_det_state == FT_DET_ACTIVE) {
 		task->current_syscall = 319;
