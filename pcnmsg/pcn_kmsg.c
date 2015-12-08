@@ -855,7 +855,7 @@ static int __pcn_kmsg_send_timed(unsigned int dest_cpu, struct pcn_kmsg_message 
                 return -1;
 
 	msg->hdr.from_cpu = my_cpu;
-	rc = win_put(dest_window, msg, no_block, time);
+	rc = win_put_timed(dest_window, msg, no_block, time);
 
 	if (rc) {
 		if (no_block && (rc == -EAGAIN))

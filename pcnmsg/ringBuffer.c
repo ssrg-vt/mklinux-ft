@@ -203,4 +203,5 @@ int win_init (void)
                 bug++;
         }
 	BUG_ON((bug>1));
+	return 0;
 }
