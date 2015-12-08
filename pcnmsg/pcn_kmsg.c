@@ -742,7 +742,13 @@ int pcn_kmsg_unregister_callback(enum pcn_kmsg_type type)
 	return 0;
 }
 
-static void wait_for_senders(void){
+/*****************************************************************************/
+/* blocking functions */
+/*****************************************************************************/
+
+// this is used in exit function - accounts for (current) concurrent writers
+static void wait_for_senders(void)
+{
 	long* active= &rkinfo->active[my_cpu];
 	long copy_active;
         long res;
@@ -762,8 +768,9 @@ again:
         }
         
 }
-/* SENDING / MARSHALING */
 
+// used in __pcn_kmsg_send only
+// increments one the number of active writers to a single buffer
 static int start_send_if_possible(int dest_cpu){
 	long* active= &rkinfo->active[dest_cpu];
 	long copy_active;
@@ -784,6 +791,8 @@ again:
 	}
 }
 
+// used in __pcn_kmsg_send only
+// decrements one the number of active writers to a single buffer
 static void finish_send(int dest_cpu){
 	long* active= &rkinfo->active[dest_cpu];
         long copy_active;
@@ -815,10 +824,13 @@ again:
         }
 }
 
+/* SENDING / MARSHALING */
+
 unsigned long int_ts;
 
-static int __pcn_kmsg_send(unsigned int dest_cpu, struct pcn_kmsg_message *msg,
-			   int no_block)
+// TODO move to ringBuffer.c
+static int __pcn_kmsg_send_timed(unsigned int dest_cpu, struct pcn_kmsg_message *msg,
+			   int no_block, unsigned long * time)
 {
 	int rc= 0;
 	struct pcn_kmsg_window *dest_window;
@@ -827,44 +839,33 @@ static int __pcn_kmsg_send(unsigned int dest_cpu, struct pcn_kmsg_message *msg,
 		KMSG_ERR("Invalid destination CPU %d\n", dest_cpu);
 		return -1;
 	}
-
 	if (unlikely(!msg)) {
-                KMSG_ERR("Passed in a null pointer to msg!\n");
-                return -1;
-
-        }
-
-	rc= start_send_if_possible(dest_cpu);
-	if(unlikely(rc==-1)){
-                return -1;
-	}
+        KMSG_ERR("Passed in a null pointer to msg!\n");
+        return -1;
+    }
 
 	dest_window = rkvirt[dest_cpu];
-
 	if (unlikely(!rkvirt[dest_cpu])) {
 		KMSG_ERR("Dest win for CPU %d not mapped!\n", dest_cpu);
-		//return -1;
-		rc= -1;
-		goto exit;
+		return -1;
 	}
-		
-	/* set source CPU */
-	msg->hdr.from_cpu = my_cpu;
 
-	rc = win_put(dest_window, msg, no_block);
+	rc = start_send_if_possible(dest_cpu);
+	if (unlikely(rc==-1))
+                return -1;
+
+	msg->hdr.from_cpu = my_cpu;
+	rc = win_put(dest_window, msg, no_block, time);
 
 	if (rc) {
-		if (no_block && (rc == EAGAIN)) {
-		//	return rc;
+		if (no_block && (rc == -EAGAIN))
 			goto exit;
-		}
+
 		KMSG_ERR("Failed to place message in dest win!\n");
-		//return -1;
-		rc= -1;
 		goto exit;
 	}
 
-
+// NOTIFICATION ---------------------------------------------------------------
 	/* send IPI */
 	if (win_int_enabled(dest_window)) {
 		KMSG_PRINTK("Interrupts enabled; sending IPI...\n");
@@ -874,12 +875,9 @@ static int __pcn_kmsg_send(unsigned int dest_cpu, struct pcn_kmsg_message *msg,
 		KMSG_PRINTK("Interrupts not enabled; not sending IPI...\n");
 	}
 
-	exit:
-		
+exit:
 	finish_send(dest_cpu);
 	return rc;
-	
-	//return 0;
 }
 
 int pcn_kmsg_send(unsigned int dest_cpu, struct pcn_kmsg_message *msg)
@@ -894,7 +892,7 @@ int pcn_kmsg_send(unsigned int dest_cpu, struct pcn_kmsg_message *msg)
 	msg->hdr.lg_seqnum = 0;
 	msg->hdr.long_number= 0;
 
-	return __pcn_kmsg_send(dest_cpu, msg, 0);
+	return __pcn_kmsg_send_timed(dest_cpu, msg, 0, 0);
 }
 
 int pcn_kmsg_send_noblock(unsigned int dest_cpu, struct pcn_kmsg_message *msg)
@@ -906,25 +904,33 @@ int pcn_kmsg_send_noblock(unsigned int dest_cpu, struct pcn_kmsg_message *msg)
 	msg->hdr.lg_seqnum = 0;
 	msg->hdr.long_number= 0;
 
-	return __pcn_kmsg_send(dest_cpu, msg, 1);
+	return __pcn_kmsg_send_timed(dest_cpu, msg, 1, 0);
 }
 
-int pcn_kmsg_send_long(unsigned int dest_cpu, 
+/*
+ * __pcn_ksg_send_long
+ *
+ * RETURNS 0 on success, it can propagate errors from lower layers
+ */
+static inline
+int __pcn_kmsg_send_long(unsigned int dest_cpu,
 		       struct pcn_kmsg_long_message *lmsg, 
-		       unsigned int payload_size)
+		       unsigned int payload_size,
+			   long * timeout)
 {
 	int i, ret =0;
 	int num_chunks = payload_size / PCN_KMSG_PAYLOAD_SIZE;
 	struct pcn_kmsg_message this_chunk;
+	unsigned long _time;
 
 	if (payload_size % PCN_KMSG_PAYLOAD_SIZE) {
 		num_chunks++;
 	}
 
 	 if ( num_chunks >= MAX_CHUNKS ){
-		printk("Message too long (size:%d, chunks:%d, max:%d) can not be transferred\n",
+		printk(KERN_ALERT"Message too long (size:%d, chunks:%d, max:%d) can not be transferred\n",
 	                payload_size, num_chunks, MAX_CHUNKS);
-	        return -1;
+	        return -EINVAL;
 	 }
 
 	KMSG_PRINTK("Sending large message to CPU %d, type %d, payload size %d bytes, %d chunks\n", 
@@ -950,13 +956,33 @@ int pcn_kmsg_send_long(unsigned int dest_cpu,
 		       i * PCN_KMSG_PAYLOAD_SIZE, 
 		       PCN_KMSG_PAYLOAD_SIZE);
 
-		ret= __pcn_kmsg_send(dest_cpu, &this_chunk, 0);
+		ret= __pcn_kmsg_send_timed(dest_cpu, &this_chunk, 0, &_time);
+		if (timeout) {
+			*timeout -= _time;
+			if (*timeout < 0) { // TODO inform the other end that the message is truncated
+				return -ETIMEDOUT;
+			}
+		}
+
 		if(ret!=0)
 			return ret;
 	}
 
 	return 0;
 }
+int pcn_kmsg_send_long(unsigned int dest_cpu,
+		       struct pcn_kmsg_long_message *lmsg,
+		       unsigned int payload_size)
+{
+	return __pcn_kmsg_send_long(dest_cpu, lmsg, payload_size, 0);
+}
+int pcn_kmsg_send_long_timeout(unsigned int dest_cpu,
+		       struct pcn_kmsg_long_message *lmsg,
+		       unsigned int payload_size, long * timeout)
+{
+	return __pcn_kmsg_send_long(dest_cpu, lmsg, payload_size, timeout);
+}
+
 
 /* RECEIVING / UNMARSHALING */
 

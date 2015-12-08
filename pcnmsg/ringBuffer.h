@@ -17,6 +17,10 @@ int win_get(struct pcn_kmsg_window *win,
 int win_put(struct pcn_kmsg_window *win,
                           struct pcn_kmsg_message *msg,
                           int no_block);
+int win_put_timed(struct pcn_kmsg_window *win,
+                          struct pcn_kmsg_message *msg,
+                          int no_block,
+						  unsigned long * time);
 
 static inline unsigned long win_inuse(struct pcn_kmsg_window *win)
 {

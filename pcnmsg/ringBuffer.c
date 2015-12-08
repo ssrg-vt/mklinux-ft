@@ -24,19 +24,24 @@ int who_is_writing=-1;
 {
 	return win->head - win->tail;
 }
-*/
+*/ //in the .h file
 static inline void win_advance_tail(struct pcn_kmsg_window *win)
 {
 	win->tail++;
 }
 
-//static inline
-int win_put(struct pcn_kmsg_window *win,
+/*
+ * this implementation was done like this in order to make fair the decision of who will insert the next message
+ * this is why win_put insert only a single message at the time
+ */
+static inline
+int __win_put(struct pcn_kmsg_window *win,
 			  struct pcn_kmsg_message *msg,
-			  int no_block)
+			  int no_block,
+			  unsigned long * time)
 {
 	unsigned long ticket;
-    	unsigned long long sleep_start;
+  	unsigned long long sleep_start;
 
 	/* if we can't block and the queue is already really long,
 	   return EAGAIN */
@@ -48,11 +53,10 @@ int win_put(struct pcn_kmsg_window *win,
 	/* grab ticket */ // TODO grab a bunch of tickets instead of just one
 	ticket = fetch_and_add(&win->head, 1);
 	if(ticket >= ULONG_MAX)
-		printk("ERROR threashold ticket reached\n");
+		printk(KERN_ALERT"ERROR threashold ticket reached\n");
 
-	PCN_DEBUG(KERN_ERR "%s: ticket = %lu, head = %lu, tail = %lu\n",
-		 __func__, ticket, win->head, win->tail);
-
+	/*PCN_DEBUG(KERN_ERR "%s: ticket = %lu, head = %lu, tail = %lu\n",
+		 __func__, ticket, win->head, win->tail);*/
 	KMSG_PRINTK("%s: ticket = %lu, head = %lu, tail = %lu\n",
 			 __func__, ticket, win->head, win->tail);
 
@@ -64,12 +68,15 @@ int win_put(struct pcn_kmsg_window *win,
 		while((win->buffer[ticket%PCN_KMSG_RBUF_SIZE].last_ticket != ticket-PCN_KMSG_RBUF_SIZE)) {
 			//pcn_cpu_relax();
 			//msleep(1);
+			// TODO add the check if the remote kernel is dead
 		}
 		while(	win->buffer[ticket%PCN_KMSG_RBUF_SIZE].ready!=0){
 			//pcn_cpu_relax();
 			//msleep(1);
+			// TODO add the check if the remote kernel is dead
 		}
-    total_sleep_win_put += native_read_tsc() - sleep_start;
+	sleep_start = native_read_tsc() - sleep_start;
+	total_sleep_win_put += sleep_start;
     sleep_win_put_count++;
 	//}
 	/* insert item */
@@ -94,10 +101,34 @@ int win_put(struct pcn_kmsg_window *win,
 
 	who_is_writing=-1;
 
+	if (time)
+		*time = sleep_start;
 msg_put++;
-
 	return 0;
 }
+
+int win_put(struct pcn_kmsg_window *win,
+		  struct pcn_kmsg_message *msg,
+		  int no_block)
+{
+	return __win_put(win, msg, no_block, 0);
+}
+
+int win_put_timed(struct pcn_kmsg_window *win,
+		  struct pcn_kmsg_message *msg,
+		  int no_block,
+		  unsigned long *time)
+{
+	return __win_put(win, msg, no_block, time);
+}
+
+// TODO
+// 1. give me the error asap - or fault if the other end goes down during this
+// 3. interrupt, receiving by multiple cores - workqueues
+// 3.a follows the scheduler (at least try)
+// 3.b round-robin
+// 4. multiple channels - high prio, low prio
+
 
 //static inline 
 int win_get(struct pcn_kmsg_window *win,
