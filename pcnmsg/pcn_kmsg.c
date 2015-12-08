@@ -27,14 +27,16 @@
 #include <linux/delay.h>
 #include <linux/timer.h>
 
+#include "atomic_x86.h"
 #include "kmsg_core.h"
+#include "ringBuffer.h"
 
 /*****************************************************************************/
 /* Logging Macros and variables */
 /*****************************************************************************/
 
-#define LOGLEN 4
-#define LOGCALL 32
+//#define LOGLEN 4
+//#define LOGCALL 32
 
 
 #define ROUND_PAGES(size) ((size/PAGE_SIZE) + ((size%PAGE_SIZE)? 1:0))
@@ -60,8 +62,8 @@ unsigned int sleep_win_put_count = 0;
 unsigned long long total_sleep_win_get = 0;
 unsigned int sleep_win_get_count = 0;
 
-static long unsigned int msg_put=0;
-static long unsigned msg_get=0;
+long unsigned int msg_put=0;
+long unsigned msg_get=0;
 
 /*****************************************************************************/
 /* COMMON STATE */
@@ -93,7 +95,7 @@ struct list_head msglist_hiprio, msglist_normprio;
 //struct pcn_kmsg_container * lg_buf[POPCORN_MAX_CPUS];
 struct list_head lg_buf[POPCORN_MAX_CPUS];
 volatile unsigned long long_id;
-int who_is_writing=-1;
+//int who_is_writing=-1; //now in ringBuffer.c
 
 /* action for bottom half */
 static void pcn_kmsg_action(/*struct softirq_action *h*/struct work_struct* work);
@@ -331,8 +333,8 @@ static int pcn_kmsg_keepalive_callback(struct pcn_kmsg_message *message)
 	int from_cpu1 = msg->sender;
 	unsigned long seq = msg->sequence_num;
 
-	KMSG_INIT("From CPU %d, type %d, sender %d seq %ld\n",
-		  msg->hdr.from_cpu, msg->hdr.type, from_cpu1, seq);
+//	KMSG_INIT("From CPU %d, type %d, sender %d seq %ld\n",//TODO change debug level and uncomment
+//		  msg->hdr.from_cpu, msg->hdr.type, from_cpu1, seq);
 
 	if (from_cpu >= POPCORN_MAX_CPUS || from_cpu1 >= POPCORN_MAX_CPUS) {
 		KMSG_ERR("Invalid source CPU %d %d\n", from_cpu, from_cpu1);
@@ -358,7 +360,7 @@ static int send_keepalive_msg(unsigned int myself, unsigned int remote)
 	msg.sender = myself;
 	msg.sequence_num = keepalive++;
 
-	rc = pcn_kmsg_send(to_cpu, (struct pcn_kmsg_message *) &msg);
+	rc = pcn_kmsg_send(remote, (struct pcn_kmsg_message *) &msg);
 
 	if (rc) {
 		KMSG_ERR("Failed to send keepalive message, rc = %d\n", rc);
@@ -384,7 +386,7 @@ static int do_keepalive(void)
 		if (rkinfo->phys_addr[i]) {
 			if (rkvirt[i]) {
 
-				KMSG_INIT("Sending checkin message to kernel %d\n", i);
+//				KMSG_INIT("Sending checkin message to kernel %d\n", i); // TODO change debug level and uncomment
 				rc = send_keepalive_msg(my_cpu, i);
 				if (rc) {
 					KMSG_ERR("POPCORN: Keepalive msg failed for CPU %d!\n", i);
@@ -409,12 +411,12 @@ void keepalive_timer (unsigned long arg)
 		if (i == my_cpu) {
 			continue;
 		}
-
-		if (rkvirt_timeout[i] < (now - tdelay*VALIDITY_WIN)) {
-			KMSG_ERR("POPCORN: Keepalive msg failed for CPU %d! Kernel is dead \n", i);
-			KMSG_ERR("POPCORN: last beacon at %ld, now %ld, validity win %ld\n",
+		if(rkinfo->phys_addr[i])
+			if (rkvirt_timeout[i] < (now - tdelay*VALIDITY_WIN)) {
+				KMSG_ERR("POPCORN: Keepalive msg failed for CPU %d! Kernel is dead \n", i);
+				KMSG_ERR("POPCORN: last beacon at %ld, now %ld, validity win %ld\n",
 					rkvirt_timeout[i], now, (now -tdelay*2));
-		}
+			}
 		// TODO here we should create a notification mechanism for the upper layers ..
 		// the messaging layer should be able to propagate itself when a connection drops
 	}
@@ -433,17 +435,17 @@ static int pcn_read_proc(char *page, char **start, off_t off, int count, int *eo
 	char *p= page;
     int len, i, idx;
 
-    p += sprintf(p, "Sleep win_put[total,count,avg]=[%llx,%lx,%llx]\n",
+    p += sprintf(p, "Sleep win_put[total,count,avg]=[%llx,%x,%llx]\n",
                     total_sleep_win_put,
                     sleep_win_put_count,
-                    sleep_win_put_count? total_sleep_win_put/sleep_win_put_count:0);
-    p += sprintf(p, "Sleep win_get[total,count,avg]=[%llx,%lx,%llx]\n",
+                    sleep_win_put_count ? (total_sleep_win_put/sleep_win_put_count) : 0ll);
+    p += sprintf(p, "Sleep win_get[total,count,avg]=[%llx,%x,%llx]\n",
                     total_sleep_win_get,
                     sleep_win_get_count,
-                    sleep_win_get_count? total_sleep_win_get/sleep_win_get_count:0);
+                    sleep_win_get_count ? (total_sleep_win_get/sleep_win_get_count) : 0ll);
 
     p += sprintf(p, "msg get:%ld\n", msg_get);
-    p += sprintf(p, "msg put:%ld len:%ld\n", msg_put, max_msg_put);
+    p += sprintf(p, "msg put:%ld len:%d\n", msg_put, max_msg_put);
 
     idx = log_r_index;
     for (i =0; i>-LOGLEN; i--)
@@ -485,7 +487,7 @@ static int pcn_read_proc(char *page, char **start, off_t off, int count, int *eo
 static int peers_read_proc(char *page, char **start, off_t off, int count, int *eof, void *data)
 {
 	char *p= page;
-    int len, i, idx;
+    int len, i;
 
     // NOTE here we want to list which are the other kernels, then if the upper layers want to know
     // more about the other kernels they should send further messages?! like kinit from Akshay/Antonio?!
@@ -493,11 +495,11 @@ static int peers_read_proc(char *page, char **start, off_t off, int count, int *
     // further redesign is necessary to support different plug-ins, here we are still too much confined
     // to the MAX_CPUS idea of multikernel
     for (i=0; i< POPCORN_MAX_CPUS; i++) {
-    	if (rkinfo[i].active || rkinfo[i].phys_addr) //I am not sure what active is
-    		p += sprintf(p, "kernel %i active %lx phys addr %lx (seq: %ld)\n",
-    		                    i, rkinfo[i].active, rkinfo[i].phys_addr, rkvirt_seq );
+    	if (rkinfo->active[i] || rkinfo->phys_addr[i]) //I am not sure what active is
+    		p += sprintf(p, "krn %d active %lx phys addr %lx (seq: %lx)\n",
+    		                    i, (unsigned long)rkinfo->active[i], (unsigned long)rkinfo->phys_addr[i], rkvirt_seq[i] );
     	if (rkvirt[i])
-    	    p += sprintf(p, "kernel %i mapped at %p (virtual) h:%d t:%d %ld ticks ago. %s\n",
+    	    p += sprintf(p, "kernel %d mapped at %p (virtual) h:%ld t:%ld %ld ticks ago. %s\n",
                     i, rkvirt[i], rkvirt[i]->head, rkvirt[i]->tail,
 					rkvirt_timeout[i], // TODO now
 					(i == my_cpu) ? "THIS_CPU" : "" );
@@ -598,7 +600,7 @@ static int __init pcn_kmsg_init(void)
 		int order = get_order(sizeof(struct pcn_kmsg_rkinfo));
 		rkinfo = __get_free_pages(GFP_KERNEL, order);
 		*/
-		KMSG_INIT("Primary kernel, mallocing rkinfo size:%d rounded:%d\n",
+		KMSG_INIT("Primary kernel, mallocing rkinfo size:%ld rounded:%ld\n",
 		       sizeof(struct pcn_kmsg_rkinfo), ROUND_PAGE_SIZE(sizeof(struct pcn_kmsg_rkinfo)));
 		rkinfo = kmalloc(ROUND_PAGE_SIZE(sizeof(struct pcn_kmsg_rkinfo)), GFP_KERNEL);
 		if (!rkinfo) {
@@ -617,7 +619,7 @@ static int __init pcn_kmsg_init(void)
 		boot_params_va = (struct boot_params *) 
 			(0xffffffff80000000 + orig_boot_params);
 		boot_params_va->pcn_kmsg_master_window = rkinfo_phys_addr;
-		KMSG_INIT("boot_params virt %p phys %p\n",
+		KMSG_INIT("boot_params virt %p phys 0x%lx\n",
 			boot_params_va, orig_boot_params);
 	}
 	else {
@@ -672,7 +674,7 @@ if (ROUND_PAGE_SIZE(sizeof(struct pcn_kmsg_window)) > KMALLOC_MAX_SIZE)
 
 	/* start timer for keepalive functionality */
 	init_timer(&keepalive_tl);
-	keepalive_tl.data = (unsigned long ) data;
+	keepalive_tl.data = (unsigned long ) 0;
 	keepalive_tl.function = keepalive_timer;
 	keepalive_tl.expires = jiffies + tdelay; // TODO tdelay should be in jiffies
 	add_timer(&(keepalive_tl));
@@ -1245,7 +1247,6 @@ unsigned volatile long bh_ts = 0, bh_ts_2 = 0;
 static void pcn_kmsg_action(struct work_struct* work)
 {
 	int rc;
-	int i;
 	int work_done = 0;
 
 	//if (!bh_ts) {

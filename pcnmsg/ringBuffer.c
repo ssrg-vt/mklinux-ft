@@ -1,22 +1,37 @@
 
+#include <asm/system.h>
+#include <asm/apic.h>
+#include <asm/hardirq.h>
+#include <asm/setup.h>
+#include <asm/bootparam.h>
+#include <asm/errno.h>
+#include <asm/atomic.h>
+
+#include <linux/delay.h>
+#include <linux/pcn_kmsg.h>
+
 #include "kmsg_core.h"
 #include "atomic_x86.h"
+#include "ringBuffer.h"
+
+int who_is_writing=-1;
 
 /*****************************************************************************/
 /* WINDOWS/BUFFERING */
 /*****************************************************************************/
 
-static inline unsigned long win_inuse(struct pcn_kmsg_window *win)
+/*static inline unsigned long win_inuse(struct pcn_kmsg_window *win)
 {
 	return win->head - win->tail;
 }
-
+*/
 static inline void win_advance_tail(struct pcn_kmsg_window *win)
 {
 	win->tail++;
 }
 
-static inline int win_put(struct pcn_kmsg_window *win,
+//static inline
+int win_put(struct pcn_kmsg_window *win,
 			  struct pcn_kmsg_message *msg,
 			  int no_block)
 {
@@ -84,7 +99,8 @@ msg_put++;
 	return 0;
 }
 
-static inline int win_get(struct pcn_kmsg_window *win,
+//static inline 
+int win_get(struct pcn_kmsg_window *win,
 			  struct pcn_kmsg_reverse_message **msg)
 {
 	struct pcn_kmsg_reverse_message *rcvd;
