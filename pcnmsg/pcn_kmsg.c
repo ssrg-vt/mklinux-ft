@@ -277,7 +277,7 @@ static int send_checkin_msg(unsigned int cpu_to_add, unsigned int to_cpu)
 	msg.window_phys_addr = rkinfo->phys_addr[my_cpu];
 	msg.cpu_to_add = cpu_to_add;
 
-	memcpy(&(msg._cpumask), cpu_present_mask, sizeof(struct cpu_mask));
+	memcpy(&(msg._cpumask), cpu_present_mask, sizeof(struct cpumask));
 
 	rc = pcn_kmsg_send(to_cpu, (struct pcn_kmsg_message *) &msg);
 
@@ -503,7 +503,7 @@ static int peers_read_proc(char *page, char **start, off_t off, int count, int *
 
     	if (rkinfo->active[i] || rkinfo->phys_addr[i]) //I am not sure what active is
     		p += sprintf(p, "krn %d active %lx phys addr %lx (seq: %lx) cpus %s\n",
-    		                    i, (unsigned long)rkinfo->active[i], (unsigned long)rkinfo->phys_addr[i], rkvirt_seq[i] );
+    		                    i, (unsigned long)rkinfo->active[i], (unsigned long)rkinfo->phys_addr[i], rkvirt_seq[i], sbuffer );
     	if (rkvirt[i])
     	    p += sprintf(p, "kernel %d mapped at %p (virtual) h:%ld t:%ld %ld ticks ago. %s\n",
                     i, rkvirt[i], rkvirt[i]->head, rkvirt[i]->tail,
@@ -663,7 +663,7 @@ if (ROUND_PAGE_SIZE(sizeof(struct pcn_kmsg_window)) > KMALLOC_MAX_SIZE)
 	win_phys_addr = virt_to_phys((void *) win_virt_addr);
 	KMSG_INIT("cpu %d physical address: 0x%lx\n", my_cpu, win_phys_addr);
 	rkinfo->phys_addr[my_cpu] = win_phys_addr;
-	memcpy(&(rkinfo->_cpumask[my_cpu]), cpu_present_mask, sizeof(struct cpu_mask));
+	memcpy(&(rkinfo->_cpumask[my_cpu]), cpu_present_mask, sizeof(struct cpumask));
 
 	rc = pcn_kmsg_window_init(rkvirt[my_cpu]);
 	if (rc) {
