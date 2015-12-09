@@ -277,6 +277,8 @@ static int send_checkin_msg(unsigned int cpu_to_add, unsigned int to_cpu)
 	msg.window_phys_addr = rkinfo->phys_addr[my_cpu];
 	msg.cpu_to_add = cpu_to_add;
 
+	memcpy(&(msg._cpumask), cpu_present_mask, sizeof(struct cpu_mask));
+
 	rc = pcn_kmsg_send(to_cpu, (struct pcn_kmsg_message *) &msg);
 
 	if (rc) {
@@ -399,7 +401,7 @@ static int do_keepalive(void)
 	return rc;
 }
 
-#define VALIDITY_WIN 2
+#define VALIDITY_WIN 4
 void keepalive_timer (unsigned long arg)
 {
 	int i;
@@ -488,6 +490,7 @@ static int peers_read_proc(char *page, char **start, off_t off, int count, int *
 {
 	char *p= page;
     int len, i;
+    char sbuffer[32];
 
     // NOTE here we want to list which are the other kernels, then if the upper layers want to know
     // more about the other kernels they should send further messages?! like kinit from Akshay/Antonio?!
@@ -495,8 +498,11 @@ static int peers_read_proc(char *page, char **start, off_t off, int count, int *
     // further redesign is necessary to support different plug-ins, here we are still too much confined
     // to the MAX_CPUS idea of multikernel
     for (i=0; i< POPCORN_MAX_CPUS; i++) {
+    	memset(sbuffer, 0, 32);
+    	cpumask_scnprintf(sbuffer, 32, &(rkinfo->_cpumask[i]));
+
     	if (rkinfo->active[i] || rkinfo->phys_addr[i]) //I am not sure what active is
-    		p += sprintf(p, "krn %d active %lx phys addr %lx (seq: %lx)\n",
+    		p += sprintf(p, "krn %d active %lx phys addr %lx (seq: %lx) cpus %s\n",
     		                    i, (unsigned long)rkinfo->active[i], (unsigned long)rkinfo->phys_addr[i], rkvirt_seq[i] );
     	if (rkvirt[i])
     	    p += sprintf(p, "kernel %d mapped at %p (virtual) h:%ld t:%ld %ld ticks ago. %s\n",
@@ -512,6 +518,10 @@ static int peers_read_proc(char *page, char **start, off_t off, int count, int *
 	*start = page + off;
 	return len;
 }
+
+/*****************************************************************************/
+/* init functions */
+/*****************************************************************************/
 
 static int __init pcn_kmsg_init(void)
 {
@@ -653,6 +663,7 @@ if (ROUND_PAGE_SIZE(sizeof(struct pcn_kmsg_window)) > KMALLOC_MAX_SIZE)
 	win_phys_addr = virt_to_phys((void *) win_virt_addr);
 	KMSG_INIT("cpu %d physical address: 0x%lx\n", my_cpu, win_phys_addr);
 	rkinfo->phys_addr[my_cpu] = win_phys_addr;
+	memcpy(&(rkinfo->_cpumask[my_cpu]), cpu_present_mask, sizeof(struct cpu_mask));
 
 	rc = pcn_kmsg_window_init(rkvirt[my_cpu]);
 	if (rc) {
@@ -702,6 +713,7 @@ subsys_initcall(pcn_kmsg_init);
 
 static void wait_for_senders(void);
 
+// TODO divide between arch specific / transport specific etc.
 void pcn_kmsg_exit(void){
 	del_timer_sync(&keepalive_tl);
 	wait_for_senders();
@@ -976,6 +988,9 @@ int pcn_kmsg_send_long(unsigned int dest_cpu,
 {
 	return __pcn_kmsg_send_long(dest_cpu, lmsg, payload_size, 0);
 }
+/*
+ * RETURNs -ETIMEDOUT if timeout expires and in timeout the still available time (negative if is past the deadline)
+ */
 int pcn_kmsg_send_long_timeout(unsigned int dest_cpu,
 		       struct pcn_kmsg_long_message *lmsg,
 		       unsigned int payload_size, long * timeout)

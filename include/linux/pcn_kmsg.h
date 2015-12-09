@@ -32,6 +32,7 @@ struct pcn_kmsg_mcast_wininfo {
 struct pcn_kmsg_rkinfo {
 	long active[POPCORN_MAX_CPUS];
 	unsigned long phys_addr[POPCORN_MAX_CPUS];
+	struct cpu_mask _cpumask[POPCORN_MAX_CPUS];
 	struct pcn_kmsg_mcast_wininfo mcast_wininfo[POPCORN_MAX_MCAST_CHANNELS];
 };
 
@@ -216,7 +217,8 @@ struct pcn_kmsg_checkin_message {
 	struct pcn_kmsg_hdr hdr;
 	unsigned long window_phys_addr;
 	unsigned char cpu_to_add;
-#define CHECKIN_PADDING (sizeof(struct pcn_kmsg_hdr) + sizeof(unsigned long) + sizeof(unsigned char))
+	struct cpumask _cpumask;
+#define CHECKIN_PADDING (sizeof(struct pcn_kmsg_hdr) + sizeof(unsigned long) + sizeof(unsigned char) + sizeof(struct cpumask))
 	char pad[(CACHE_LINE_SIZE - CHECKIN_PADDING)];
 }__attribute__((packed)) __attribute__((aligned(CACHE_LINE_SIZE)));
 
