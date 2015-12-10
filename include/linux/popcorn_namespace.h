@@ -244,7 +244,7 @@ static inline void det_wake_up(struct task_struct *task)
 	if (task->ft_det_state == FT_DET_ACTIVE) {
 		__det_start(task);
 	}
-	printk("Waking up %d from %pS with tick %d\n", task->pid, __builtin_return_address(1), task->ft_det_tick);
+	//printk("Waking up %d from %pS with tick %d\n", task->pid, __builtin_return_address(1), task->ft_det_tick);
 }
 
 static inline int have_token(struct task_struct *task)

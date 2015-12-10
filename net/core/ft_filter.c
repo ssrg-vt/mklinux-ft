@@ -23,6 +23,7 @@
 #include <linux/netfilter.h>
 #include <linux/netfilter_ipv4.h>
 #include <linux/workqueue.h>
+#include <linux/ft_time_breakdown.h>
 
 #define FT_FILTER_VERBOSE 0 
 #define FT_FILTER_MINIMAL_VERBOSE 0
@@ -151,6 +152,7 @@ struct rx_copy_work{
         struct delayed_work work;
         struct net_filter_info* filter;
 	int count;
+	u64 time;
 	void* data;
 };
 
@@ -179,6 +181,7 @@ struct handshake_work{
         long long ack_pckt_id;
         __u32 ack_seq;
 	int completed;
+	u64 time;
 };
 
 //number of working queues used to dispatch pckts forwarded by primary replica. NOTE: there will be a special listening queue in addition to PCKT_DISP_POOL_SIZE to just handling handshakes.
@@ -2454,6 +2457,9 @@ unsigned int ft_hook_func_after_network_layer(unsigned int hooknum,
         unsigned int ret= NF_ACCEPT;
         struct sock *sk;
 	struct net_filter_info *filter;
+	u64 time, itime;
+	
+	ft_start_time(&time);
 
         if(hooknum != NF_INET_POST_ROUTING){
                 printk("ERROR: %s has been called at hooknum %d\n", __func__, hooknum);
@@ -2480,7 +2486,9 @@ unsigned int ft_hook_func_after_network_layer(unsigned int hooknum,
 					filter= sk->ft_filter;
                                 
 				if(filter){
-                                        get_ft_filter(filter);
+                       			ft_start_time(&itime);
+
+			                get_ft_filter(filter);
                                         
 					if(filter->type & FT_FILTER_SECONDARY_REPLICA){
 						if (iph->protocol == IPPROTO_UDP)
@@ -2498,11 +2506,16 @@ unsigned int ft_hook_func_after_network_layer(unsigned int hooknum,
 						
 					}
                                         put_ft_filter(filter);
+					
+					ft_end_time(&itime);
+					ft_update_time(&itime, FT_TIME_AFT_NET_REP);
                                 }
                         }
 
         }
 out:
+	ft_end_time(&time);
+	ft_update_time(&time, FT_TIME_HOOK_AFT_NET);
 	return ret; 
 
 }
@@ -2779,7 +2792,7 @@ retry_syn:
 			if(inet_csk_search_req(my_work->filter->ft_sock, &prev, tcp_header->source, iph->saddr, iph->daddr))
 				goto out_first_miss;
 		}	
-		printk("WARNING %s packet syn seq %u port %d ip %d did not create a minisocket (retry %d)\n", __func__, my_work->syn_seq, ntohs(my_work->port), my_work->source, retry);      
+		//printk("WARNING %s packet syn seq %u port %d ip %d did not create a minisocket (retry %d)\n", __func__, my_work->syn_seq, ntohs(my_work->port), my_work->source, retry);      
 		retry++;
 		msleep(10*retry);
 	}
@@ -2817,7 +2830,7 @@ retry_ack:
 		ret = ip_route_input_noref(skb, iph->daddr, iph->saddr, iph->tos, skb->dev);
 		if (!ret) {
 			if(find_tcp_sock(skb, tcp_header) == my_work->filter->ft_sock){
-                 		printk("WARNING %s packet syn seq %u port %d ip %d did not create a socket (retry %d)\n", __func__, my_work->syn_seq, ntohs(my_work->port), my_work->source, retry);
+                 		//printk("WARNING %s packet syn seq %u port %d ip %d did not create a socket (retry %d)\n", __func__, my_work->syn_seq, ntohs(my_work->port), my_work->source, retry);
 				retry++;
                 		msleep(10*retry);
         		}
@@ -2840,6 +2853,9 @@ retry_ack:
                 goto retry_ack;
 
 	kfree_skb(skb);
+
+	ft_end_time(&my_work->time);
+	ft_update_time(&my_work->time,  FT_TIME_INJECT_HANDSHACKE_PACKETS);
 
 	kfree(work);
 	return;
@@ -2980,7 +2996,7 @@ static void create_handshake_seq(struct rx_copy_work *my_work){
 		if(hand_work->syn){
 			if(syn){
 				if(seq==hand_work->syn_seq){
-					printk("%s: duplicate syn ip %d port %d\n", __func__, source, ntohs(port));
+					//printk("%s: duplicate syn ip %d port %d\n", __func__, source, ntohs(port));
 					goto out_no_save;
 				}
 				//previous syn older than current
@@ -3048,7 +3064,8 @@ static void create_handshake_seq(struct rx_copy_work *my_work){
                          hand_work->ack_pckt_id= msg->pckt_id;
                          hand_work->ack_seq= seq;
                 }
-
+		
+		hand_work->time= my_work->time;
 		add_handshake_work(hand_work);
 
 	}
@@ -3245,6 +3262,10 @@ again:	spin_lock_bh(&filter->lock);
 	put_ft_filter(filter);
 
 out:	pcn_kmsg_free_msg(msg);
+
+	ft_end_time(&my_work->time);
+	ft_update_time(&my_work->time, FT_TIME_INJECT_RECV_PACKET);
+
 	kfree(work);
 	return;
 out_err:
@@ -3263,6 +3284,9 @@ static int handle_rx_copy(struct pcn_kmsg_message* inc_msg){
 #if FT_FILTER_VERBOSE
 	char* ft_pid_printed;
 #endif
+	u64 time;
+
+	ft_start_time(&time);
 
 again:  filter= find_and_get_filter(&msg->creator, msg->filter_id, msg->is_child, msg->daddr, msg->dport);
         if(filter){
@@ -3287,6 +3311,7 @@ again:  filter= find_and_get_filter(&msg->creator, msg->filter_id, msg->is_child
         		work->data= inc_msg;
 			work->filter= filter;
 			work->count= 0;
+			work->time= time;
         		queue_work(rx_copy_wq, (struct work_struct*)work);
 			
                 }
@@ -3716,6 +3741,7 @@ static unsigned int ft_hook_before_network_layer_primary(struct net_filter_info 
 #if FT_FILTER_VERBOSE
         char* filter_id_printed;
 #endif
+	u64 time;
 	
         spin_lock_bh(&filter->lock);
         pckt_id= ++filter->local_rx;
@@ -3728,7 +3754,12 @@ static unsigned int ft_hook_before_network_layer_primary(struct net_filter_info 
                 kfree(filter_id_printed);
 #endif
 	if(is_there_any_secondary_replica(filter->ft_popcorn)){
-        	send_skb_copy(filter, pckt_id, local_tx, skb);
+        	ft_start_time(&time);
+
+		send_skb_copy(filter, pckt_id, local_tx, skb);
+
+		ft_end_time(&time);
+		ft_update_time(&time, FT_TIME_SEND_PACKET_REP);
 	}
 
         /* Do not know if it is correct to send msgs while holding this lock,
@@ -3841,6 +3872,9 @@ unsigned int ft_hook_func_before_network_layer(unsigned int hooknum,
         struct sock *sk;
 	struct net_filter_info *filter;
 	int err, time_wait=0;
+	u64 time, itime;
+
+	ft_start_time(&time);
 
         if(hooknum != NF_INET_PRE_ROUTING){
                 printk("ERROR: %s has been called at hooknum %d\n", __func__, hooknum);
@@ -3895,6 +3929,8 @@ unsigned int ft_hook_func_before_network_layer(unsigned int hooknum,
 				}
 
 				if(filter){
+					ft_start_time(&itime);
+
 					get_ft_filter(filter);
 					check_correct_filter(&filter, sk, skb);
 					
@@ -3908,6 +3944,10 @@ unsigned int ft_hook_func_before_network_layer(unsigned int hooknum,
 					}
 
 					put_ft_filter(filter);
+					
+					ft_end_time(&itime);
+				        ft_update_time(&itime, FT_TIME_BEF_NET_REP);
+
 				}
 
                         	if(time_wait){
@@ -3920,6 +3960,8 @@ unsigned int ft_hook_func_before_network_layer(unsigned int hooknum,
 
 	}
 out:
+	ft_end_time(&time);
+	ft_update_time(&time, FT_TIME_HOOK_BEF_NET);
         return ret;
 }
 
@@ -4814,8 +4856,10 @@ unsigned int ft_hook_before_tcp(struct sk_buff *skb, struct net_filter_info *ft_
 #if FT_FILTER_VERBOSE
         char *filter_id_printed;
 #endif
+	u64 time;
 
         if(ft_filter){
+		ft_start_time(&time);
 
 		get_ft_filter(ft_filter);
                 
@@ -4881,6 +4925,9 @@ unsigned int ft_hook_before_tcp(struct sk_buff *skb, struct net_filter_info *ft_
                 }
 
 		put_ft_filter(ft_filter);
+		
+		ft_end_time(&time);
+		ft_update_time(&time, FT_TIME_BEF_TRA_REP);
         }
 
         return ret;
@@ -4932,7 +4979,10 @@ unsigned int ft_hook_func_before_transport_layer(unsigned int hooknum,
 	struct udphdr *udp_header;
 	struct tcphdr *tcp_header;
 	struct sock *sk;
+	u64 time;
 
+	ft_start_time(&time);
+	
 	
 	if(hooknum != NF_INET_LOCAL_IN){
 		printk("ERROR: %s has been called at hooknum %d\n", __func__, hooknum);
@@ -5005,6 +5055,9 @@ unsigned int ft_hook_func_before_transport_layer(unsigned int hooknum,
 	}
 
 out:
+	ft_end_time(&time);
+	ft_update_time(&time, FT_TIME_HOOK_BEF_TRA);
+
 	return ret;
 }
 
@@ -5138,6 +5191,9 @@ unsigned int ft_hook_func_after_transport_layer(unsigned int hooknum,
         unsigned int ret= NF_ACCEPT;
         struct sock *sk;
         struct net_filter_info *filter;
+	u64 time, itime;
+
+	ft_start_time(&time);
 
 	if(hooknum != NF_INET_LOCAL_OUT){
                 printk("ERROR: %s has been called at hooknum %d\n", __func__, hooknum);
@@ -5163,18 +5219,26 @@ unsigned int ft_hook_func_after_transport_layer(unsigned int hooknum,
 					filter= sk->ft_filter;
                                 
 				if(filter){
-                                        get_ft_filter(filter);
+                       			ft_start_time(&itime);   
+              
+					get_ft_filter(filter);
 			
                                         if(filter->type & FT_FILTER_PRIMARY_AFTER_SECONDARY_REPLICA){
 						ret= ft_hook_after_transport_layer_primary_after_secondary(filter, skb);
 					}
                                         
                                         put_ft_filter(filter);
+
+					ft_end_time(&itime);
+					ft_update_time(&itime, FT_TIME_AFT_TRA_REP);
                                 }
                         }
 
         }
 out:
+	ft_end_time(&time);
+	ft_update_time(&time, FT_TIME_HOOK_AFT_TRA);
+
         return ret;
 
 }
