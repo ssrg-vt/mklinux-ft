@@ -443,7 +443,7 @@ void ft_send_syscall_info(struct ft_pop_rep *replica_group, struct ft_pid *prima
 void ft_send_syscall_info_from_work(struct ft_pop_rep *replica_group, struct ft_pid *primary_pid, int syscall_id, char* syscall_info, unsigned int syscall_info_size){
 	struct send_syscall_work *work;
 
-	FTPRINTK("%s called from pid %s\n", __func__, current->pid);
+//FTPRINTK("%s called from pid %s\n", __func__, current->pid);
 
 	work= kmalloc( sizeof(*work), GFP_KERNEL);
 	if(!work)
@@ -515,7 +515,7 @@ void* ft_wait_for_syscall_info(struct ft_pid *secondary, int id_syscall){
         int free_key= 0;
 	void* ret= NULL;
 
-	FTPRINTK("%s called from pid %s\n", __func__, current->pid);
+	//FTPRINTK("%s called from pid %s\n", __func__, current->pid);
 
 	key= ft_syscall_get_key_from_ft_pid(secondary, id_syscall);
         if(!key)
@@ -829,11 +829,8 @@ long syscall_hook_enter(struct pt_regs *regs)
 {
         current->current_syscall = regs->orig_ax;
         // System call number is in orig_ax
-        if(ft_is_replicated(current) && (
-                    regs->orig_ax != __NR_popcorn_det_start &&
-                    regs->orig_ax != __NR_popcorn_det_end &&
-                    regs->orig_ax != __NR_popcorn_det_tick &&
-                    regs->orig_ax != __NR_futex)) {
+        // Only increment the system call counter if we see one of the synchronized system calls.
+        if(ft_is_replicated(current) && (regs->orig_ax == 44 || regs->orig_ax == 45 || regs->orig_ax == 96)) {
                 current->id_syscall++;
         }
         return regs->orig_ax;
