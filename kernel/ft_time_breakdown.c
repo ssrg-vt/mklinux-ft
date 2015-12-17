@@ -23,10 +23,12 @@ struct time_statistics breackdown_times[MAX_BREACKDOWNS];
 
 void ft_start_time(u64 *time){
         *time= cpu_clock(home_kernel);
+	//trace_printk("%pS\n", __builtin_return_address(0));
 }
 
 void ft_end_time(u64 *time){
         *time= cpu_clock(home_kernel) - *time;
+	//trace_printk("%pS\n", __builtin_return_address(0));
 }
 
 void ft_update_time(u64 *time, unsigned int type){

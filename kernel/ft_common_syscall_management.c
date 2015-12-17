@@ -425,8 +425,8 @@ static void send_syscall_info_to_secondary_replicas_from_work(struct work_struct
 	
 	kfree(my_work->private);
 
-	ft_end_time(&my_work->time);
-	ft_update_time(&my_work->time, TIME_SEND_SYCALL);
+	//ft_end_time(&my_work->time);
+	//ft_update_time(&my_work->time, TIME_SEND_SYCALL);
 
         kfree(my_work);
 
@@ -456,7 +456,7 @@ void ft_send_syscall_info_from_work(struct ft_pop_rep *replica_group, struct ft_
 	struct send_syscall_work *work;
 	u64 time;
 
-        ft_start_time(&time);
+        //ft_start_time(&time);
 
 
 	FTPRINTK("%s called from pid %s\n", __func__, current->pid);
@@ -533,7 +533,7 @@ void* ft_wait_for_syscall_info(struct ft_pid *secondary, int id_syscall){
 	void* ret= NULL;
 	u64 time;
 	
-	ft_start_time(&time);
+	//ft_start_time(&time);
 
 	FTPRINTK("%s called from pid %s\n", __func__, current->pid);
 
@@ -585,8 +585,8 @@ out:
                 kfree(key);
         kfree(present_info);
 	
-	ft_end_time(&time);
-	ft_update_time(&time, TIME_RCV_SYSCALL);
+	//ft_end_time(&time);
+	//ft_update_time(&time, TIME_RCV_SYSCALL);
 
         return ret;
 

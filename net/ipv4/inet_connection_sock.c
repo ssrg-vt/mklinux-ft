@@ -23,6 +23,7 @@
 #include <net/route.h>
 #include <net/tcp_states.h>
 #include <net/xfrm.h>
+#include <linux/ft_replication.h>
 #include <linux/popcorn_namespace.h>
 #include <linux/ft_common_syscall_management.h>
 
@@ -307,7 +308,15 @@ struct sock *inet_csk_accept(struct sock *sk, int flags, int *err)
 			goto out_err;
 	}
 
+#ifdef FT_POPCORN
+	newsk = ft_syscall_accept(&icsk->icsk_accept_queue, sk, flags, err);
+	if(newsk==NULL){
+		goto out_err;
+	}
+#else
 	newsk = reqsk_queue_get_child(&icsk->icsk_accept_queue, sk);
+#endif
+
 	WARN_ON(newsk->sk_state == TCP_SYN_RECV);
 out:
 	release_sock(sk);

@@ -10,6 +10,7 @@
 #include <linux/net.h>
 #include <net/sock.h>
 #include <linux/tcp.h>
+#include <net/inet_sock.h>
 
 #define FT_NET_VERBOSE 0
 #define FT_NET_MVERBOSE 0
@@ -26,6 +27,8 @@
 #else
 #define FTMPRINTK(...) ;
 #endif
+
+#define ENABLE_CHECKSUM 0
 
 struct send_fam_info{
 	int size;
@@ -50,15 +53,193 @@ struct rcv_fam_info{
 	char data;
 };
 
+struct accept_info{
+	__be32	daddr;
+	__be16	dport;
+};
+
+static struct sock *__ft_syscall_accept_primary(struct request_sock_queue *queue, struct sock *parent, int* err){
+	struct sock* ret= reqsk_queue_get_child(queue, parent);
+	struct accept_info *sys_info;
+
+	if(is_there_any_secondary_replica(current->ft_popcorn)){
+		sys_info= kmalloc(sizeof(*sys_info), GFP_ATOMIC);
+		if(!sys_info){
+			printk("ERROR %s impossible to malloc\n", __func__);
+			*err= -ENOMEM;
+			return NULL;
+		}
+
+		sys_info->daddr= inet_sk(ret)->inet_daddr;
+		sys_info->dport= inet_sk(ret)->inet_dport;
+
+		ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) sys_info, sizeof(*sys_info));
+		kfree(sys_info);
+	}
+
+	//printk("%s sending connection %i %i pid %d \n", __func__, ntohs(inet_sk(ret)->inet_daddr), ntohs(inet_sk(ret)->inet_dport), current->pid);
+
+	return ret;
+
+}
+
+static struct sock *__ft_syscall_accept_secondary(struct request_sock_queue *queue, struct sock *parent, int flags, int* err, __be32 addr, __be16 port){
+	struct request_sock *req;
+        struct sock *child;
+	
+	req = reqsk_queue_find_remove(queue, addr, port);
+	if(!req){
+		long timeo = sock_rcvtimeo(parent, flags & O_NONBLOCK);
+
+                /* If this is a non blocking socket don't sleep */
+                if (!timeo){
+                        *err= -EAGAIN ;
+			return NULL;
+		}
+
+                /* code from  inet_csk_wait_for_connect*/
+
+       		DEFINE_WAIT(wait);
+
+        	for (;;) {
+			
+			//printk("%s pid %i waiting for a:%i p:%i \n", __func__, current->pid, ntohs(addr), ntohs(port));
+	
+                	prepare_to_wait_exclusive(sk_sleep(parent), &wait,
+                                          TASK_INTERRUPTIBLE);
+                	release_sock(parent);
+                	if (!reqsk_queue_find(queue, addr, port))
+                        	timeo = schedule_timeout(timeo);
+                	lock_sock(parent);
+			
+                	*err = 0;
+			req= reqsk_queue_find_remove(queue, addr, port);
+                	if (req)
+                        	break;
+                	*err = -EINVAL;
+                	if (parent->sk_state != TCP_LISTEN)
+                        	break;
+                	*err = sock_intr_errno(timeo);
+                	if (signal_pending(current))
+                        	break;
+                	*err = -EAGAIN;
+                	if (!timeo)
+                        	break;
+        	}
+
+
+        	finish_wait(sk_sleep(parent), &wait);
+
+		if (*err){
+                 	return NULL;
+		}
+		else{
+			if(!req){
+				printk("ERROR %s out from loop but not req pid %d\n", __func__, current->pid);
+				*err= -EFAULT;
+				return NULL;
+			}
+		}
+	}
+
+	//printk("%s received connection %i %i pid %d\n", __func__, ntohs(addr), ntohs(port), current->pid);
+	/* code from: reqsk_queue_get_child */
+
+	child = req->sk;
+        
+        WARN_ON(child == NULL);
+
+        sk_acceptq_removed(parent);
+        __reqsk_free(req);
+        
+
+	return child;
+}
+
+static struct sock *ft_syscall_accept_primary_after_secondary(struct request_sock_queue *queue, struct sock *parent, int flags, int* err){
+	struct accept_info *syscall_info_primary;
+	__be32 addr;
+        __be16 port;
+
+	syscall_info_primary= (struct accept_info *) ft_get_pending_syscall_info(&current->ft_pid, current->id_syscall);
+        if(syscall_info_primary){
+		addr= syscall_info_primary->daddr;
+        	port= syscall_info_primary->dport;
+
+        	kfree(syscall_info_primary);
+			
+		return __ft_syscall_accept_secondary(queue, parent, flags, err, addr, port);
+	}
+	else{
+        	return __ft_syscall_accept_primary(queue, parent, err);
+	}
+}
+
+static struct sock *ft_syscall_accept_secondary(struct request_sock_queue *queue, struct sock *parent, int flags, int* err){
+	struct accept_info *syscall_info_primary;
+	__be32 addr;
+	__be16 port;
+
+	syscall_info_primary= (struct accept_info *) ft_wait_for_syscall_info(&current->ft_pid, current->id_syscall);
+        if(!syscall_info_primary){
+                FTMPRINTK("%s switching to primary after secondary for pid %d\n", __func__, current->pid);
+
+                /* I am the new primary replica*/
+
+                return ft_syscall_accept_primary_after_secondary(queue, parent, flags, err);
+        }
+
+	addr= syscall_info_primary->daddr;
+	port= syscall_info_primary->dport;
+	
+	kfree(syscall_info_primary);
+
+	return __ft_syscall_accept_secondary(queue, parent, flags, err, addr, port);
+}
+
+static struct sock *ft_syscall_accept_primary(struct request_sock_queue *queue, struct sock *parent, int* err){
+	
+	return __ft_syscall_accept_primary(queue, parent, err);
+}
+
+struct sock *ft_syscall_accept(struct request_sock_queue *queue, struct sock *parent, int flags, int* err){
+	
+	if(ft_is_replicated(current)){
+
+                if( ft_is_primary_replica(current) ){
+			return ft_syscall_accept_primary(queue, parent, err);
+		}
+		else{
+			if( ft_is_secondary_replica(current) )
+				return ft_syscall_accept_secondary(queue, parent, flags, err);
+			else{
+				if(!ft_is_primary_after_secondary_replica(current)){
+					printk("ERROR: %s current (pid %d) is not primary, secondary or primary_after_secondary replica \n", __func__, current->pid);
+					return NULL;
+				}
+				else
+					return ft_syscall_accept_primary_after_secondary(queue, parent, flags, err);
+			}
+		}
+
+        }
+        else{
+                return reqsk_queue_get_child(queue, parent);
+        }
+
+
+}
+
 static int after_syscall_rcv_family_primary_after_secondary(struct kiocb *iocb, struct socket *sock,
                                        struct msghdr *msg, size_t size, int flags, int ret){
 
         struct rcv_fam_info *syscall_info;
 	struct rcv_fam_info_before *store_info; 
 	int data_size;
+#if ENABLE_CHECKSUM
 	char* where_to_copy;
 	int err;
-
+#endif
         FTPRINTK("%s started for pid %d syscall_id %d\n", __func__, current->pid, current->id_syscall);
 	
 	store_info= (struct rcv_fam_info_before*) current->useful;
@@ -91,6 +272,7 @@ static int after_syscall_rcv_family_primary_after_secondary(struct kiocb *iocb, 
 		 * the data can be retrieved from the secondary from the packet forwarded to the stable buffer.
 		 */
 		syscall_info->csum= 0;
+		#if ENABLE_CHECKSUM
 		if(data_size){
 				where_to_copy= &syscall_info->data;	
 				syscall_info->csum= csum_and_copy_from_user(store_info->ubuf, where_to_copy, data_size, syscall_info->csum, &err);
@@ -101,7 +283,7 @@ static int after_syscall_rcv_family_primary_after_secondary(struct kiocb *iocb, 
 				where_to_copy[data_size]='\0';
 				FTPRINTK("%s: data %s size %d\n", __func__, where_to_copy, data_size);
 		}
-		
+		#endif
 		/*TODO
 		 * NOTE: for tcp msg it is not important
 		 * but for udp msg the fields  msg_name/msg_namelen should be copied too.
@@ -113,8 +295,9 @@ static int after_syscall_rcv_family_primary_after_secondary(struct kiocb *iocb, 
 		 */
 		FTPRINTK("%s pid %d syscall_id %d sending size %d flags %d csum %d ret %d \n", __func__, current->pid, current->id_syscall, syscall_info->size, syscall_info->flags, syscall_info->csum, syscall_info->ret);
 		ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) syscall_info, sizeof(*syscall_info)+ data_size);
-
+#if ENABLE_CHECKSUM
 	out:
+#endif
 		kfree(syscall_info);
 	}
 
@@ -164,6 +347,8 @@ static int after_syscall_rcv_family_primary(struct kiocb *iocb, struct socket *s
 		 * the data can be retrieved from the secondary from the packet forwarded to the stable buffer.
 		 */
 		syscall_info->csum= 0;
+		
+		#if ENABLE_CHECKSUM
 		if(data_size){
 				where_to_copy= &syscall_info->data;	
 				syscall_info->csum= csum_and_copy_from_user(store_info->ubuf, where_to_copy, data_size, syscall_info->csum, &err);
@@ -174,7 +359,8 @@ static int after_syscall_rcv_family_primary(struct kiocb *iocb, struct socket *s
 				where_to_copy[data_size]='\0';
 				FTPRINTK("%s: data %s size %d\n", __func__, where_to_copy, data_size);
 		}
-		
+		#endif
+
 		/*TODO
 		 * NOTE: for tcp msg it is not important
 		 * but for udp msg the fields  msg_name/msg_namelen should be copied too.
@@ -323,6 +509,8 @@ static int before_syscall_rcv_family_primary_after_secondary(struct kiocb *iocb,
 				goto out;
 			}
 
+			#if ENABLE_CHECKSUM
+
 			char* app= kmalloc(data_size+1, GFP_KERNEL);
 			if(!app){
 				ret= -ENOMEM;
@@ -339,7 +527,8 @@ static int before_syscall_rcv_family_primary_after_secondary(struct kiocb *iocb,
                        	app[data_size]='\0';
 			FTPRINTK("%s: data %s size %d\n", __func__, app, data_size);
 			kfree(app);
-			 
+			
+			#endif			 
         	}
 	
 		/*TODO
@@ -417,6 +606,8 @@ out:
 				* the data can be retrieved from the secondary from the packet forwarded to the stable buffer.
 				*/
 				syscall_info_primary->csum= 0;
+			
+				#if ENABLE_CHECKSUM
 				if(data_size>0){
 					where_to_copy= &syscall_info_primary->data;
 					syscall_info_primary->csum= csum_and_copy_from_user(ubuf, where_to_copy, data_size, syscall_info_primary->csum, &err);
@@ -427,6 +618,7 @@ out:
 					where_to_copy[data_size]='\0';
 					FTPRINTK("%s: data %s size %d\n", __func__, where_to_copy, data_size);
 				}
+				#endif
 
 				/*TODO
 				 * NOTE: for tcp msg it is not important
@@ -536,6 +728,8 @@ static int before_syscall_rcv_family_secondary(struct kiocb *iocb, struct socket
 				ret= -EFAULT;
 				goto out;
 			}
+			
+			#if ENABLE_CHECKSUM
 
 			char* app= kmalloc(data_size+1, GFP_KERNEL);
 			if(!app){
@@ -552,7 +746,8 @@ static int before_syscall_rcv_family_secondary(struct kiocb *iocb, struct socket
                        	app[data_size]='\0';
 			FTPRINTK("%s: data %s size %d\n", __func__, app, data_size);
 			kfree(app);
-			
+
+			#endif			
                 
         }
 	
@@ -689,6 +884,8 @@ static int before_syscall_send_family_primary_after_secondary(struct kiocb *iocb
 		}
 
 		my_csum= 0;
+
+		#if ENABLE_CHECKSUM
 		iovlen = msg->msg_iovlen;
 		iov = msg->msg_iov;
 
@@ -704,7 +901,7 @@ static int before_syscall_send_family_primary_after_secondary(struct kiocb *iocb
                         FTMPRINTK("%s: data %s\n",__func__,app);
                         kfree(app);
                 }
-
+		#endif
 
 		if(my_csum != syscall_info_primary->csum){
 			printk("ERROR: %s for pid %d csum of send (syscall id %d) not matching between primary(%d) and secondary(%d)\n", __func__, current->pid, current->id_syscall, syscall_info_primary->csum, my_csum);
@@ -726,7 +923,9 @@ static int before_syscall_send_family_primary_after_secondary(struct kiocb *iocb
 
         	//calculate hash
         	syscall_info_primary->csum= 0;
-        	iovlen = msg->msg_iovlen;
+        	
+		#if ENABLE_CHECKSUM
+		iovlen = msg->msg_iovlen;
         	iov = msg->msg_iov;
 
 		/* The data is in user space, so I copy it in kernel and after I perform the checksum.
@@ -744,6 +943,8 @@ static int before_syscall_send_family_primary_after_secondary(struct kiocb *iocb
 			FTMPRINTK("%s: data %s\n",__func__,app);
 			kfree(app);
 		}
+
+		#endif
 
 		syscall_info_primary->size= size;
 
@@ -822,6 +1023,8 @@ static int before_syscall_send_family_primary(struct kiocb *iocb, struct socket 
         /* The data is in user space, so I copy it in kernel and after I perform the checksum.
          * Is it really necessary to copy it?! NOT SURE. HOPEFULLY NOT! 
          */
+	#if ENABLE_CHECKSUM
+
         for(i=0; i< iovlen; i++){
                 char* app= kmalloc(iov[i].iov_len +1, GFP_KERNEL);
                 syscall_info->csum= csum_and_copy_from_user(iov[i].iov_base, (void*)app, iov[i].iov_len, syscall_info->csum, &err);
@@ -834,6 +1037,8 @@ static int before_syscall_send_family_primary(struct kiocb *iocb, struct socket 
 		FTMPRINTK("%s: data %s\n",__func__,app);
 	        kfree(app);
         }
+
+	#endif
 
 	syscall_info->size= size;
 		

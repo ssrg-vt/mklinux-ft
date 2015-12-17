@@ -162,6 +162,8 @@ struct net_filter_info{
 	struct list_head list_member;
 	struct kref kref;
 	struct ft_pop_rep* ft_popcorn;
+
+	/*those fields could be collapsed on a union...*/
 	struct sock* ft_sock;
 	struct request_sock* ft_req; //to use only if it is still a minisocket at the place of ft_sock
 	struct inet_timewait_sock* ft_time_wait; //to use only when in TCP_TIME_WAIT and struct sock is beeing substituted by a struct inet_timewait_sock	
@@ -199,7 +201,8 @@ struct net_filter_info{
 	int deliver_packets;
 	struct stable_buffer *stable_buffer;
 	struct send_buffer *send_buffer;
-	
+
+	/*those fields should be moved inside a per-tcp struct together with tcp_param...*/	
 	__u32 my_initial_out_seq;
 	__u32 in_initial_seq;
 	__u32 idelta_seq;
@@ -244,6 +247,8 @@ int ft_before_syscall_rcv_family(struct kiocb *iocb, struct socket *sock,
                                        struct msghdr *msg, size_t size, int flags, int* ret);
 int ft_after_syscall_rcv_family(struct kiocb *iocb, struct socket *sock,
                                        struct msghdr *msg, size_t size, int flags, int ret);
+struct request_sock_queue;
+struct sock *ft_syscall_accept(struct request_sock_queue *queue, struct sock *parent, int flags, int* err);
 
 int remove_and_copy_from_stable_buffer(struct stable_buffer *stable_buffer, struct iovec* iov, int size);
 int insert_in_send_buffer_and_csum(struct send_buffer *send_buffer, struct iovec *iov, int iovlen, int size, __wsum *csum);
@@ -266,6 +271,8 @@ void ft_deactivate_sk_after_time_wait_filter(struct inet_timewait_sock *tw);
 void ft_check_tcp_init_param(struct net_filter_info* filter, struct sock* sk, struct request_sock *req);
 int ft_check_tcp_timestamp(struct sock* sk);
 void ft_activate_grown_filter(struct net_filter_info* filter);
+struct request_sock *ft_reqsk_queue_find_remove(struct request_sock_queue *queue, __be32 daddr, __be16 dport);
+struct request_sock *ft_reqsk_queue_find(struct request_sock_queue *queue, __be32 daddr, __be16 dport);
 int flush_pending_pckt_in_filters(void);
 int update_filter_type_after_failure(void);
 int ft_is_filter_primary(struct net_filter_info* filter);

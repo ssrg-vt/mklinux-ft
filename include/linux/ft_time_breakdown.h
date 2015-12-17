@@ -9,7 +9,7 @@
 
 #include <linux/types.h>
 
-#define FT_BREAKDOWN_TIME 0
+#define FT_BREAKDOWN_TIME 1
 
 #define FT_TIME_HOOK_BEF_NET 0
 #define FT_TIME_BEF_NET_REP 1
