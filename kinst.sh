@@ -19,15 +19,16 @@ detect_os() {
 	# If Linux, try to determine specific distribution
 	if [ "$UNAME" == "linux" ]; then
 	    # If available, use LSB to identify distribution
-	    if [ -f /etc/lsb-release -o -d /etc/lsb-release.d ]; then
-		DISTRO=$(lsb_release -i | cut -d: -f2 | sed s/'^\t'//)
-	    # Otherwise, use release info file
-	    else
-		DISTRO=$(ls -d /etc/[A-Za-z]*[_-][rv]e[lr]* | grep -v "lsb" | cut -d'/' -f3 | cut -d'-' -f1 | cut -d'_' -f1)
-	    fi
-	fi
-	# For everything else (or if above failed), just use generic identifier
-	[ "$DISTRO" == "" ] && DISTRO=$UNAME
+        lsb_release=$(command -v lsb_release) 
+        if [ -n "$lsb_release" ]; then
+            DISTRO=$(lsb_release -i | cut -d: -f2 | sed s/'^\t'//)
+            # Otherwise, use release info file
+        else
+            DISTRO=$(ls -d /etc/[A-Za-z]*[_-][rv]e[lr]* | grep -v "lsb" | cut -d'/' -f3 | cut -d'-' -f1 | cut -d'_' -f1)
+        fi
+    fi
+    # For everything else (or if above failed), just use generic identifier
+    [ "$DISTRO" == "" ] && DISTRO=$UNAME
 
 	# Convert to lowercase before echoing result
 	echo $DISTRO | tr "[:upper:]" "[:lower:]"
@@ -68,8 +69,9 @@ sudo cp System.map /boot/System.map-"$VER"
 DISTRO=`detect_os`
 
 # Generate ramfs and update bootloader as needed by different distributions
-if [ "$DISTRO" == "ubuntu" ]; then
+if [ "$DISTRO" == "ubuntu" -o "$DISTRO" == "debian" ]; then
 	echo "Running update-initramfs and update-grub for Ubuntu..."
+    # TODO: why -c? why not -u?
 	sudo update-initramfs -c -k "$VER"
 	sudo update-grub
 
