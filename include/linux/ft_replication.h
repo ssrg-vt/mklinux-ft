@@ -199,6 +199,9 @@ struct net_filter_info{
 	 * 2: inforce same order of primary (used by udp)
 	 */
 	int deliver_packets;
+	int ft_primary_closed;
+        int ft_pending_packets;
+
 	struct stable_buffer *stable_buffer;
 	struct send_buffer *send_buffer;
 
@@ -261,6 +264,7 @@ int send_zero_window_in_filters(void);
 
 struct tcp_request_sock;
 
+void print_all_filters(void);
 int create_filter(struct task_struct *task, struct sock *sk, gfp_t priority);
 void ft_listen_init(struct sock* sk);
 //int create_filter_accept(struct task_struct *task, struct socket *newsock,struct socket *sock);
