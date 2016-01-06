@@ -21,6 +21,8 @@
 //#define AGGRESSIVE_DET 1
 #define DETONLY
 
+#define DET_PROF 1
+
 struct popcorn_namespace *get_popcorn_ns(struct popcorn_namespace *ns);
 struct popcorn_namespace *copy_pop_ns(unsigned long flags, struct popcorn_namespace *ns);
 void free_popcorn_ns(struct kref *kref);
@@ -53,6 +55,12 @@ struct popcorn_namespace
 	int task_count;
 	/* The queue for storing wake up information from primary */
 	struct wake_up_buffer wake_up_buffer;
+#ifdef DET_PROF
+	uint64_t start_cost[64];
+	uint64_t tick_cost[64];
+	uint64_t end_cost[64];
+	spinlock_t tick_cost_lock;
+#endif
 };
 
 extern struct popcorn_namespace init_pop_ns;
@@ -95,6 +103,15 @@ static inline void init_task_list(struct popcorn_namespace *ns)
 	spin_lock_init(&(ns->wake_up_buffer.enqueue_lock));
 	spin_lock_init(&(ns->wake_up_buffer.dequeue_lock));
 	memset(&(ns->wake_up_buffer.wake_up_queue), 0, MAX_WAKE_UP_BUFFER * sizeof(struct sleeping_syscall_request *));
+#ifdef DET_PROF
+	spin_lock_init(&(ns->tick_cost_lock));
+	int i;
+	for (i = 0; i < 64; i++) {
+		ns->tick_cost[i] = 1;
+		ns->start_cost[i] = 1;
+		ns->end_cost[i] = 1;
+	}
+#endif
 }
 
 // Pass the token to the next task in this namespace
@@ -159,6 +176,12 @@ static inline int remove_task_from_ns(struct popcorn_namespace *ns, struct task_
 			update_token(ns);
 			ns->task_count--;
 			spin_unlock_irqrestore(&ns->task_list_lock, flags);
+#ifdef DET_PROF
+			printk("tick_count now for %d %llu %llu %llu\n", task->pid % 64, ns->start_cost[task->pid % 64], ns->tick_cost[task->pid % 64], ns->end_cost[task->pid % 64]);
+			ns->tick_cost[task->pid % 64] = 1;
+			ns->start_cost[task->pid % 64] = 1;
+			ns->end_cost[task->pid % 64] = 1;
+#endif
 			//dump_task_list(ns);
 			return 0;
 		}
@@ -235,7 +258,6 @@ static inline void det_wake_up(struct task_struct *task)
 	}
 
 	if (task->ft_det_state == FT_DET_ACTIVE) {
-		task->current_syscall = 319;
 		__det_start(task);
 	}
 //	printk("Waking up %d from %d with tick %d\n", task->pid, task->current_syscall, task->ft_det_tick);

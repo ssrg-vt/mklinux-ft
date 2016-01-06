@@ -16,6 +16,10 @@
 #include <linux/ft_replication.h>
 #include <linux/sched.h>
 #include <asm/atomic.h>
+#include <asm/msr.h>
+#include <linux/time.h>
+
+#define DET_PROF 1
 
 static struct kmem_cache *popcorn_ns_cachep;
 struct proc_dir_entry *res;
@@ -191,29 +195,47 @@ int write_notify_popcorn_ns(struct file *file, const char __user *buffer, unsign
 
 	return count;
 }
+#ifdef DET_PROF
+__inline__ uint64_t perf_counter(struct timeval *tv)
+{
+	do_gettimeofday(tv);
+}
+#endif
 
 long __det_start(struct task_struct *task)
 {
 	struct popcorn_namespace *ns;
 	unsigned long flags;
 	int i;
+#ifdef DET_PROF
+	uint64_t dtime;
+#endif
 
 	if(!is_popcorn(task)) {
 		return 0;
 	}
 
 	ns = task->nsproxy->pop_ns;
+#ifdef DET_PROF
+	dtime = (uint64_t) ktime_get().tv64;
+#endif
+
 	for (;;) {
 		task->ft_det_state = FT_DET_WAIT_TOKEN;
 		set_task_state(task, TASK_INTERRUPTIBLE);
 		if (have_token(task)) {
+			set_task_state(task, TASK_RUNNING);
 			break;
 		}
 		schedule();
 	}
 	task->ft_det_state = FT_DET_ACTIVE;
-	set_task_state(task, TASK_RUNNING);
-
+#ifdef DET_PROF
+	dtime = (uint64_t) ktime_get().tv64 - dtime;
+	spin_lock(&(ns->tick_cost_lock));
+	ns->start_cost[task->pid % 64] += dtime;
+	spin_unlock(&(ns->tick_cost_lock));
+#endif
 	return 1;
 }
 
@@ -225,10 +247,22 @@ asmlinkage long sys_popcorn_det_start(void)
 asmlinkage long sys_popcorn_det_tick(long tick)
 {
 	struct popcorn_namespace *ns;
+#ifdef DET_PROF
+	uint64_t dtime;
+#endif
+	ns = current->nsproxy->pop_ns;
 
 	if(is_popcorn(current)) {
+#ifdef DET_PROF
+		dtime = (uint64_t) ktime_get().tv64;
+#endif
 		update_tick(current, tick);
-		ns = current->nsproxy->pop_ns;
+#ifdef DET_PROF
+		dtime = (uint64_t) ktime_get().tv64 - dtime;
+		spin_lock(&(ns->tick_cost_lock));
+		ns->tick_cost[current->pid % 64] += dtime;
+		spin_unlock(&(ns->tick_cost_lock));
+#endif
 		return 0;
 	}
 
@@ -239,17 +273,29 @@ long __det_end(struct task_struct *task)
 {
 	struct popcorn_namespace *ns;
 	unsigned long flags;
+#ifdef DET_PROF
+	uint64_t dtime;
+#endif
 
 	if(!is_popcorn(task)) {
 		return 0;
 	}
 
+#ifdef DET_PROF
+	dtime = (uint64_t) ktime_get().tv64;
+#endif
 	ns = task->nsproxy->pop_ns;
 
 	task->ft_det_state = FT_DET_INACTIVE;
 	update_tick(task, 1);
 	//dump_task_list(ns);
 
+#ifdef DET_PROF
+	dtime = (uint64_t) ktime_get().tv64 - dtime;
+	spin_lock(&(ns->tick_cost_lock));
+	ns->end_cost[task->pid % 64] += dtime;
+	spin_unlock(&(ns->tick_cost_lock));
+#endif
 	return 1;
 }
 
