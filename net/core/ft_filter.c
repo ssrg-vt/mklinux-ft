@@ -1395,7 +1395,7 @@ void print_all_filters(void){
                 list_for_each(iter, &filter_list_head) {
                         filter = list_entry(iter, struct net_filter_info, list_member);
 			filter_id= print_filter_id(filter);
-			trace_printk("%s filter: %s usage: %u sk->state %u \n",  (filter->type & FT_FILTER_FAKE)?"fake":"", filter_id, filter->kref.refcount, filter->ft_sock?filter->ft_sock->sk_state:0);
+			trace_printk("%s filter: %s usage: %u sk->state: %u pendig_pckt %u \n",  (filter->type & FT_FILTER_FAKE)?"fake":"", filter_id, filter->kref.refcount, filter->ft_sock?filter->ft_sock->sk_state:0, filter->ft_pending_packets);
                 	kfree(filter_id);
 		}
         }
@@ -1984,7 +1984,9 @@ void ft_change_to_time_wait_filter(struct sock *sk, struct inet_timewait_sock *t
 
 void ft_deactivate_sk_after_time_wait_filter(struct inet_timewait_sock *tw){
         if(tw->ft_filter){
+			spin_lock_bh(&tw->ft_filter->lock);
                         tw->ft_filter->ft_sock= NULL;
+			spin_unlock_bh(&tw->ft_filter->lock);
         }
 }
 
@@ -2824,18 +2826,11 @@ static void dispatch_handshake_msg(struct work_struct* work){
 	struct handshake_work* my_work= (struct handshake_work*) work;
 	int ret;
 	struct sk_buff *skb;
-	struct iphdr *iph;
-        struct tcphdr *tcp_header;
-	struct request_sock **prev;
-	int retry= 0;
-	struct net_filter_info *filter;
+//	struct net_filter_info *filter;
 
 	trace_printk("%s ack and syn dispatching: syn seq %u  ack seq %u port %d ip %d\n", __func__, my_work->syn_seq, my_work->ack_seq, ntohs(my_work->port), my_work->source);
 
 	skb= my_work->syn;
-	skb_get(skb);
-
-retry_syn:
 
 	local_bh_disable();
         ret= netif_receive_skb(skb);
@@ -2845,80 +2840,20 @@ retry_syn:
 		printk("WARNING %s packet syn seq %u port %d ip %d was dropped\n", __func__, my_work->syn_seq, ntohs(my_work->port), my_work->source);
 	}	
 
-	__skb_pull(skb, ip_hdrlen(skb));
-        skb_reset_transport_header(skb);
-	tcp_header= tcp_hdr(skb);
-        iph = ip_hdr(skb);
+	msleep(1);
 
-        if(!inet_csk_search_req(my_work->filter->ft_sock, &prev, tcp_header->source, iph->saddr, iph->daddr)){
-		if(!retry){
-			msleep(1);
-			if(inet_csk_search_req(my_work->filter->ft_sock, &prev, tcp_header->source, iph->saddr, iph->daddr))
-				goto out_first_miss;
-		}	
-		//printk("WARNING %s packet syn seq %u port %d ip %d did not create a minisocket (retry %d)\n", __func__, my_work->syn_seq, ntohs(my_work->port), my_work->source, retry);      
-		retry++;
-		msleep(10*retry);
-	}
-
-out_first_miss:
-
-	__skb_push(skb, ip_hdrlen(skb));
-
-	//not retring for now...
-	if(retry>0 && retry<1)
-		goto retry_syn;
-
-	kfree_skb(skb);
-	
-	retry= 0;
 	skb= my_work->ack;
-	skb_get(skb);
-
-retry_ack:
 
 	local_bh_disable();
         ret= netif_receive_skb(skb);
         local_bh_enable();
 
 	if(ret==NET_RX_DROP){
-                printk("WARNING %s packet ack seq %u port %d ip %d was dropped (retry %d)\n", __func__, my_work->ack_seq, ntohs(my_work->port), my_work->source, retry);
+                printk("WARNING %s packet ack seq %u port %d ip %d was dropped \n", __func__, my_work->ack_seq, ntohs(my_work->port), my_work->source);
 	}  
 
-	__skb_pull(skb, ip_hdrlen(skb));
-        skb_reset_transport_header(skb);
-        tcp_header= tcp_hdr(skb);
-	iph = ip_hdr(skb);
-        
-	if (skb_dst(skb) == NULL) {
-		ret = ip_route_input_noref(skb, iph->daddr, iph->saddr, iph->tos, skb->dev);
-		if (!ret) {
-			if(find_tcp_sock(skb, tcp_header) == my_work->filter->ft_sock){
-                 		//printk("WARNING %s packet syn seq %u port %d ip %d did not create a socket (retry %d)\n", __func__, my_work->syn_seq, ntohs(my_work->port), my_work->source, retry);
-				retry++;
-                		msleep(10*retry);
-        		}
 
-		}
-	}
-	else{
-		if(find_tcp_sock(skb, tcp_header) == my_work->filter->ft_sock){
-                                printk("WARNING %s packet syn seq %u port %d ip %d did not create a socket (retry %d)", __func__, my_work->syn_seq, ntohs(my_work->port), my_work->source, retry);
-                		retry++;
-                		msleep(10*retry);
-		}
-
-	}
-
-        __skb_push(skb, ip_hdrlen(skb));
-
-	//not retring for now...
-        if(retry>0 && retry<1)
-                goto retry_ack;
-
-	kfree_skb(skb);
-
-	filter= my_work->filter;
+	/*filter= my_work->filter;
 	if(!(filter->type &  FT_FILTER_ENABLE)){
                 if(!(filter->type & FT_FILTER_FAKE)){
                         printk("%s: ERROR filter is disable but not fake\n",__func__);
@@ -2931,17 +2866,19 @@ retry_ack:
 
                 filter= find_and_get_filter(&creator, filter_id, is_child , my_work->source, my_work->port);
 		if(!filter){
-			printk("ERROR %s no filter active after releasing fake port %d\n", htons(my_work->port));
+			printk("ERROR %s no filter active after releasing fake port %d\n", __func__, htons(my_work->port));
 			goto out;
 		}
 	}	
+
 	spin_lock_bh(&filter->lock);	
 	filter->ft_pending_packets--;
 	spin_unlock_bh(&filter->lock);
+	put_ft_filter(filter);
+	*/
+
 	//ft_end_time(&my_work->time);
 	//ft_update_time(&my_work->time,  FT_TIME_INJECT_HANDSHACKE_PACKETS);
-
-	put_ft_filter(filter);
 
 out:	kfree(work);
 
@@ -3019,8 +2956,8 @@ match:		hand_work->ack= skb;
 
 		if(hand_work->syn_seq+1 == hand_work->ack_seq){
 			hand_work->completed= 1;
-			get_ft_filter(filter);
-			hand_work->filter= filter;			
+			//get_ft_filter(filter);
+			//hand_work->filter= filter;			
 			//NOTE: if NF_STOLEN is returned, the before_tcp_hook will not push back ip header
 			__skb_push(skb, ip_hdrlen(skb));
 			INIT_WORK((struct work_struct*) hand_work, dispatch_handshake_msg);
@@ -3136,11 +3073,6 @@ static void create_handshake_seq(struct rx_copy_work *my_work){
 			printk("ERROR %s impossible to kmalloc\n", __func__);
 			goto out_no_save;
 		}
-		get_ft_filter(filter);
-
-		spin_lock_bh(&filter->lock);		
-		filter->ft_pending_packets++;
-		spin_unlock_bh(&filter->lock);
 
 		memset(hand_work, 0, sizeof(*hand_work));
 		
@@ -3168,7 +3100,14 @@ check:
 	if(hand_work->syn && hand_work->ack){
 		if(hand_work->syn_seq+1 == hand_work->ack_seq){
 			remove_handshake_work(hand_work);
+			
+			/*get_ft_filter(filter);
 			hand_work->filter= filter;
+                	spin_lock_bh(&filter->lock);
+                	filter->ft_pending_packets++;
+                	spin_unlock_bh(&filter->lock);
+			*/
+
 			//INIT_WORK((struct work_struct*) hand_work, dispatch_handshake_msg);
 			//queue_work(filter->rx_copy_wq, (struct work_struct *) hand_work);	
 			dispatch_handshake_msg((struct work_struct *)hand_work);
@@ -3190,12 +3129,13 @@ static void dispatch_release_filter_msg (struct work_struct* work){
         struct release_filter_work *my_work=  (struct release_filter_work*) work;
 	struct release_filter_msg *msg= (struct release_filter_msg* ) my_work->data;	
 	struct net_filter_info *filter= ( struct net_filter_info *) my_work->filter;
+	struct workqueue_struct *rx_copy_wq;
 
 again:	spin_lock_bh(&filter->lock);
 	
-	if(!(filter->type &  FT_FILTER_ENABLE)){
+	if(!(filter->type & FT_FILTER_ENABLE)){
 		if(!(filter->type & FT_FILTER_FAKE)){
-                        printk("%s: ERROR filter is disable but not fake\n",__func__);
+                        printk("%s: ERROR filter is disable but not fake\n", __func__);
                         goto out_lock;
                 }
 	
@@ -3211,14 +3151,17 @@ again:	spin_lock_bh(&filter->lock);
 
 	}
 	
-	if(filter->ft_pending_packets > 0){
+	if(filter->type & FT_FILTER_FAKE || filter->ft_pending_packets > 0){
 		//printk("WARNING ft_pending_packets %d port %d\n", filter->ft_pending_packets, ntohs(filter->tcp_param.dport));
 		/*wait for pending packets to get dispatched*/
+		rx_copy_wq= filter->rx_copy_wq;
+		spin_unlock_bh(&filter->lock);
+
 		INIT_WORK(work, dispatch_release_filter_msg);
 		my_work->count++;
 		my_work->filter= filter;
-		queue_work(filter->rx_copy_wq, work);
-		spin_unlock_bh(&filter->lock);
+		
+		queue_work(rx_copy_wq, work);
 		return;
 
         }
@@ -3228,25 +3171,31 @@ again:	spin_lock_bh(&filter->lock);
                         case TCP_CLOSE_WAIT:
                         /*The device has received a close request (FIN) from the other device. It must now wait for the application on the local device to acknowledge this request and generate a matching request.*/
                         //printk("WARNING in CLOSE_WAIT port %d\n", ntohs(filter->tcp_param.dport));
-                        INIT_WORK(work, dispatch_release_filter_msg);
+                        rx_copy_wq= filter->rx_copy_wq;
+                	spin_unlock_bh(&filter->lock);
+			INIT_WORK(work, dispatch_release_filter_msg);
 	                my_work->count++;
 			my_work->filter= filter;
-        	        queue_work(filter->rx_copy_wq, work);
-                	spin_unlock_bh(&filter->lock);
+        	        queue_work(rx_copy_wq, work);
 
 			return;
+
+			case TCP_CLOSE:
+			goto out_lock;
 
 			default: 
 			break;
 
 		}	
+		trace_printk("calling tcp_done port %d state %d ft_time_wait %u\n", ntohs(filter->tcp_param.dport), filter->ft_sock->sk_state, filter->ft_time_wait?1:0);
 		tcp_done(filter->ft_sock);
+		trace_printk("after tcp_done port %d state %d ft_time_wait %u\n", ntohs(filter->tcp_param.dport),filter->ft_sock? filter->ft_sock->sk_state:0, filter->ft_time_wait?1:0);
 	}
 
 out_lock: 
 	spin_unlock_bh(&filter->lock);
-out:	put_ft_filter(filter);
-	pcn_kmsg_free_msg(msg);
+	put_ft_filter(filter);
+out:	pcn_kmsg_free_msg(msg);
 	kfree(work);
 
 	return;
@@ -3341,8 +3290,12 @@ again:	spin_lock_bh(&filter->lock);
 			//if not queue for listening socket change queue
 			//NOTE: this may cause potential reordering of incoming connections
                         if(filter->rx_copy_wq != pckt_dispatcher_pool[PCKT_DISP_POOL_SIZE]){
+
                                 filter->rx_copy_wq = pckt_dispatcher_pool[PCKT_DISP_POOL_SIZE];
-                                spin_unlock_bh(&filter->lock);
+                        	//remove this if counting packts in listening socket
+				filter->ft_pending_packets--; 
+
+			       	spin_unlock_bh(&filter->lock);
 
                                 INIT_WORK(work, dispatch_copy_msg);
                                 my_work->data= msg;
@@ -3355,8 +3308,11 @@ again:	spin_lock_bh(&filter->lock);
 			spin_unlock_bh(&filter->lock);
 			
 			create_handshake_seq(my_work);
-                	
-			filter->ft_pending_packets--;
+                
+
+	                //spin_lock_bh(&filter->lock);
+        	        //filter->ft_pending_packets--;
+                	//spin_unlock_bh(&filter->lock);	
 
 			put_ft_filter(filter);
 			pcn_kmsg_free_msg(msg);
@@ -3430,7 +3386,7 @@ again:	spin_lock_bh(&filter->lock);
 	
 			/* If here possibly the listening wq is busy trying to opening connections,
 			 * including mine...
-			 * flush it to be sure that if there was mine pending connection is getting opened...
+			 * flush it to be sure that if there was my pending connection is getting opened...
 			 */
 			flush_workqueue(pckt_dispatcher_pool[PCKT_DISP_POOL_SIZE]);
 			
@@ -3519,7 +3475,7 @@ static int handle_rx_copy(struct pcn_kmsg_message* inc_msg){
 #if FT_FILTER_VERBOSE
 	char* ft_pid_printed;
 #endif
-	u64 time;
+	//u64 time;
 
 	//ft_start_time(&time);
 
@@ -3528,7 +3484,7 @@ again:  filter= find_and_get_filter(&msg->creator, msg->filter_id, msg->is_child
                 spin_lock_bh(&filter->lock);
            
 		if(filter->ft_primary_closed==1){
-			printk("WARNING primary closed is set port %d\n", filter->tcp_param.dport);
+			printk("WARNING primary closed is set on port %d\n", filter->tcp_param.dport);
 		}
 	
 		if(!filter->rx_copy_wq){
@@ -3537,7 +3493,8 @@ again:  filter= find_and_get_filter(&msg->creator, msg->filter_id, msg->is_child
 
 		if(filter->type & FT_FILTER_ENABLE){
 			rx_copy_wq= filter->rx_copy_wq;
-			filter->ft_pending_packets++;
+			if(rx_copy_wq!=pckt_dispatcher_pool[PCKT_DISP_POOL_SIZE])
+				filter->ft_pending_packets++;
 			spin_unlock_bh(&filter->lock);	
 		
 			work= kmalloc(sizeof(*work), GFP_ATOMIC);
@@ -3551,7 +3508,7 @@ again:  filter= find_and_get_filter(&msg->creator, msg->filter_id, msg->is_child
         		work->data= inc_msg;
 			work->filter= filter;
 			work->count= 0;
-			work->time= time;
+			//work->time= time;
         		queue_work(rx_copy_wq, (struct work_struct*)work);
 			
                 }
@@ -3713,10 +3670,10 @@ static int handle_release_filter(struct pcn_kmsg_message* inc_msg){
 	struct release_filter_msg *msg= (struct release_filter_msg* ) inc_msg;
 	int ret= 0;
 	struct release_filter_work *work;
-	struct net_filter_info* filter;
+	struct net_filter_info *filter;
 	struct workqueue_struct *rx_copy_wq;
 
-again:  filter= find_and_get_filter(&msg->creator, msg->filter_id, msg->is_child, msg->daddr, msg->dport);
+	filter= find_and_get_filter(&msg->creator, msg->filter_id, msg->is_child, msg->daddr, msg->dport);
         if(filter){
 		
                 spin_lock_bh(&filter->lock);
@@ -3728,6 +3685,7 @@ again:  filter= find_and_get_filter(&msg->creator, msg->filter_id, msg->is_child
 
 		filter->ft_primary_closed= 1;
 		rx_copy_wq= filter->rx_copy_wq;
+		trace_printk("%s for port %d\n", __func__, msg->dport);
 		spin_unlock_bh(&filter->lock);	
 	
 		work= kmalloc(sizeof(*work), GFP_ATOMIC);

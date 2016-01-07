@@ -325,7 +325,7 @@ static int do_checkin(void)
 }
 
 /* keepalive */
-static const unsigned long tdelay = (HZ * 100)/1000; // every 100ms
+static const unsigned long tdelay = (HZ * 500)/1000; // every 500ms
 
 static int pcn_kmsg_keepalive_callback(struct pcn_kmsg_message *message)
 {
