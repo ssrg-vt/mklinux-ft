@@ -201,8 +201,9 @@ struct handshake_work{
 	u64 time;
 };
 
-//number of working queues used to dispatch pckts forwarded by primary replica. NOTE: there will be a special listening queue in addition to PCKT_DISP_POOL_SIZE to just handling handshakes.
-#define PCKT_DISP_POOL_SIZE 10
+//number of working queues used to dispatch pckts forwarded by primary replica. NOTE: there will be a special listening queue in addition to PCKT_DISP_POOL_SIZE to just handling handshakes of HAND_DISP_POOL_SIZE threads.
+#define PCKT_DISP_POOL_SIZE 32
+#define HAND_DISP_POOL_SIZE 8
 #define WQ_NAME_PREFIX "ft_wq_"
 #define WQ_NAME_SIZE 20
 char workqueue_name[(PCKT_DISP_POOL_SIZE+1)][WQ_NAME_SIZE];
@@ -249,7 +250,7 @@ static int create_pckt_dispatcher_pool(void){
 		return -EFAULT;
 	}
 
-	wq= alloc_workqueue(workqueue_name[i], WQ_UNBOUND | WQ_MEM_RECLAIM | WQ_HIGHPRI, 1);
+	wq= alloc_workqueue(workqueue_name[i], WQ_UNBOUND | WQ_MEM_RECLAIM | WQ_HIGHPRI, HAND_DISP_POOL_SIZE);
 	if(wq){
 		pckt_dispatcher_pool[PCKT_DISP_POOL_SIZE]= wq;
 		INIT_LIST_HEAD(&pending_handshake);
@@ -261,6 +262,14 @@ static int create_pckt_dispatcher_pool(void){
 
 	
 	return 0;
+}
+
+static void lock_handshake(void){
+	spin_lock_bh(&pending_handshake_lock);
+}
+
+static void unlock_handshake(void){
+        spin_unlock_bh(&pending_handshake_lock);
 }
 
 static void remove_handshake_work(struct handshake_work* work){
@@ -278,6 +287,13 @@ static void add_handshake_work(struct handshake_work* new_work){
 	head= &pending_handshake;
 	list_add(&new_work->list_member, head);
 	spin_unlock_bh(&pending_handshake_lock);
+}
+
+static void add_handshake_work_notlocking(struct handshake_work* new_work){
+        struct list_head *head;
+
+        head= &pending_handshake;
+        list_add(&new_work->list_member, head);
 }
 
 static struct handshake_work* get_handshake_work(__be32 source, __be16 port){
@@ -303,6 +319,29 @@ out:
 	spin_unlock_bh(&pending_handshake_lock);
 	return ret;
 	
+}
+
+static struct handshake_work* get_handshake_work_notlocking(__be32 source, __be16 port){
+        struct handshake_work* ret= NULL;
+        struct list_head *head;
+        struct list_head *iter= NULL;
+        struct handshake_work* objPtr= NULL;
+
+        head= &pending_handshake;
+        if(!list_empty(head)){
+
+                list_for_each(iter, head) {
+                        objPtr = list_entry(iter, struct handshake_work, list_member);
+                        if(objPtr->source == source && objPtr->port == port){
+                                ret= objPtr;
+                                goto out;
+                        }
+                }
+        }
+
+out:
+        return ret;
+
 }
 
 static struct workqueue_struct * peak_wq_from_pckt_dispatcher_pool(void){
@@ -1368,7 +1407,7 @@ static void add_filter(struct net_filter_info* filter){
                 return;
 
         spin_lock_bh(&filter_list_lock);
-        list_add(&filter->list_member,&filter_list_head);
+        list_add_tail(&filter->list_member,&filter_list_head);
         spin_unlock_bh(&filter_list_lock);
 
 }
@@ -3013,8 +3052,8 @@ static void create_handshake_seq(struct rx_copy_work *my_work){
 	}
 
 	//printk("%s called ip %d port %d syn %d ack %d \n", __func__,  source, ntohs(port), syn, ack);
-
-	hand_work= get_handshake_work(source, port);
+	lock_handshake();
+	hand_work= get_handshake_work_notlocking(source, port);
 
 	//NOTE not assuming uncorrect sequence of packts (attact cases)
 	if(hand_work){
@@ -3068,7 +3107,7 @@ static void create_handshake_seq(struct rx_copy_work *my_work){
 		}
 	}	
 	else{
-		hand_work= kmalloc(sizeof(*hand_work), GFP_KERNEL);
+		hand_work= kmalloc(sizeof(*hand_work), GFP_ATOMIC);
 		if(!hand_work){
 			printk("ERROR %s impossible to kmalloc\n", __func__);
 			goto out_no_save;
@@ -3092,11 +3131,12 @@ static void create_handshake_seq(struct rx_copy_work *my_work){
                 }
 		
 		hand_work->time= my_work->time;
-		add_handshake_work(hand_work);
+		add_handshake_work_notlocking(hand_work);
 
 	}
 
 check:
+	unlock_handshake();
 	if(hand_work->syn && hand_work->ack){
 		if(hand_work->syn_seq+1 == hand_work->ack_seq){
 			remove_handshake_work(hand_work);
@@ -3121,6 +3161,7 @@ check:
 	return;
 	
 out_no_save:
+	unlock_handshake();
 	kfree_skb(skb);
 	return;
 }
@@ -3153,6 +3194,7 @@ again:	spin_lock_bh(&filter->lock);
 	
 	if(filter->type & FT_FILTER_FAKE || filter->ft_pending_packets > 0){
 		//printk("WARNING ft_pending_packets %d port %d\n", filter->ft_pending_packets, ntohs(filter->tcp_param.dport));
+
 		/*wait for pending packets to get dispatched*/
 		rx_copy_wq= filter->rx_copy_wq;
 		spin_unlock_bh(&filter->lock);
@@ -3263,6 +3305,7 @@ static void dispatch_copy_msg(struct work_struct* work){
 	struct sk_buff *skb;
 	char* filter_id_printed;
 	unsigned long time_to_wait;
+	struct workqueue_struct *rx_copy_wq;
 
 	/*if(filter->tcp_param.daddr==0){
 		printk("%s daddr %u dport %u pid %d\n", __func__, filter->tcp_param.daddr, ntohs(filter->tcp_param.dport), current->pid);
@@ -3345,12 +3388,15 @@ again:	spin_lock_bh(&filter->lock);
 
                         queue_delayed_work(filter->rx_copy_wq, (struct delayed_work *)work, time_to_wait);
 			*/
+			rx_copy_wq= filter->rx_copy_wq;
+			spin_unlock_bh(&filter->lock);
+
 			INIT_WORK(work, dispatch_copy_msg);
 			my_work->data= (void*) msg;
                         my_work->filter= filter;
                         my_work->count++;
-			queue_work( filter->rx_copy_wq, work);
-			spin_unlock_bh(&filter->lock);
+			queue_work( rx_copy_wq, work);
+			
 			return;
 		}
 		
@@ -3375,15 +3421,15 @@ again:	spin_lock_bh(&filter->lock);
 
                         queue_delayed_work(filter->rx_copy_wq, (struct delayed_work *)work, time_to_wait);
 			*/
-		
+			rx_copy_wq= filter->rx_copy_wq;
+                        spin_unlock_bh(&filter->lock);
+
 			INIT_WORK(work, dispatch_copy_msg);
                         my_work->data= (void*) msg;
                         my_work->filter= filter;
                         my_work->count++;
-                        queue_work( filter->rx_copy_wq, work);
+                        queue_work(rx_copy_wq, work);
 
-                        spin_unlock_bh(&filter->lock);
-	
 			/* If here possibly the listening wq is busy trying to opening connections,
 			 * including mine...
 			 * flush it to be sure that if there was my pending connection is getting opened...
@@ -3685,7 +3731,6 @@ static int handle_release_filter(struct pcn_kmsg_message* inc_msg){
 
 		filter->ft_primary_closed= 1;
 		rx_copy_wq= filter->rx_copy_wq;
-		trace_printk("%s for port %d\n", __func__, msg->dport);
 		spin_unlock_bh(&filter->lock);	
 	
 		work= kmalloc(sizeof(*work), GFP_ATOMIC);
