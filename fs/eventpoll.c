@@ -38,6 +38,7 @@
 #include <asm/io.h>
 #include <asm/mman.h>
 #include <linux/atomic.h>
+#include <linux/ft_replication.h>
 
 /*
  * LOCKING:
@@ -1575,6 +1576,8 @@ SYSCALL_DEFINE4(epoll_ctl, int, epfd, int, op, int, fd,
 	    copy_from_user(&epds, event, sizeof(struct epoll_event)))
 		goto error_return;
 
+	printk("Adding fd %d to ep %d\n", fd, epfd);
+
 	/* Get the "struct file *" for the eventpoll file */
 	error = -EBADF;
 	file = fget(epfd);
@@ -1689,6 +1692,15 @@ SYSCALL_DEFINE4(epoll_wait, int, epfd, struct epoll_event __user *, events,
 	struct file *file;
 	struct eventpoll *ep;
 
+#ifdef FT_POPCORN
+	/* Retrive epoll info from primary */
+	if(ft_is_replicated(current) &&
+		ft_is_secondary_replica(current)) {
+		printk("waiting on epfd %d\n", epfd);
+		return ft_ep_poll_secondary(events);
+	}
+#endif
+
 	/* The maximum number of event must be greater than zero */
 	if (maxevents <= 0 || maxevents > EP_MAX_EVENTS)
 		return -EINVAL;
@@ -1721,6 +1733,15 @@ SYSCALL_DEFINE4(epoll_wait, int, epfd, struct epoll_event __user *, events,
 
 	/* Time to fish for events ... */
 	error = ep_poll(ep, events, maxevents, timeout);
+
+#ifdef FT_POPCORN
+	/* Send it to replica */
+	if(ft_is_replicated(current) &&
+		ft_is_primary_replica(current)) {
+		printk("sending epfd %d\n", epfd);
+		ft_ep_poll_primary(events, error);
+	}
+#endif
 
 error_fput:
 	fput(file);
