@@ -12,6 +12,9 @@
 #include <linux/spinlock_types.h>
 #include <linux/wait.h>
 #include <linux/popcorn.h>
+#include <linux/list.h>
+#include <linux/fs.h>
+#include <linux/eventpoll.h>
 
 #define FT_POPCORN
 
@@ -259,6 +262,8 @@ int remove_and_copy_from_stable_buffer_no_wait(struct stable_buffer *stable_buff
 int trim_stable_buffer_in_filters(void);
 int flush_send_buffer_in_filters(void);
 int send_zero_window_in_filters(void);
+int ft_ep_poll_secondary(struct epoll_event __user *events);
+int ft_ep_poll_primary(struct epoll_event __user *events, int nr_events);
 
 #define DUMMY_DRIVER "ft_dummy_driver"
 
