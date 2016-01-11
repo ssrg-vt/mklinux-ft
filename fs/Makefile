@@ -21,7 +21,7 @@ endif
 
 obj-$(CONFIG_BLK_DEV_INTEGRITY) += bio-integrity.o
 obj-y				+= notify/
-obj-$(CONFIG_EPOLL)		+= eventpoll.o
+obj-$(CONFIG_EPOLL)		+= eventpoll.o ft_eventpoll.o
 obj-$(CONFIG_ANON_INODES)	+= anon_inodes.o
 obj-$(CONFIG_SIGNALFD)		+= signalfd.o
 obj-$(CONFIG_TIMERFD)		+= timerfd.o

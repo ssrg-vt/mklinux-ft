@@ -854,8 +854,13 @@ long syscall_hook_enter(struct pt_regs *regs)
         current->current_syscall = regs->orig_ax;
         // System call number is in orig_ax
         // Only increment the system call counter if we see one of the synchronized system calls.
-        if(ft_is_replicated(current) && (regs->orig_ax == __NR_sendto || regs->orig_ax == __NR_recvfrom || regs->orig_ax == __NR_gettimeofday
-		|| regs->orig_ax == __NR_accept) ) {
+        if(ft_is_replicated(current) && (regs->orig_ax == __NR_sendto || regs->orig_ax == __NR_recvfrom || regs->orig_ax == __NR_gettimeofday || regs->orig_ax == __NR_epoll_wait ||
+                    regs->orig_ax == __NR_read ||
+                    regs->orig_ax == __NR_accept ||
+                    regs->orig_ax == __NR_write ||
+                    regs->orig_ax == __NR_bind ||
+                    regs->orig_ax == __NR_listen)) {
+                printk("Syscall %d on %d\n", regs->orig_ax, current->pid);
                 current->id_syscall++;
         }
         return regs->orig_ax;
