@@ -19,7 +19,6 @@
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/bug.h>
-
 #include <net/sock.h>
 #include <linux/ft_replication.h>
 
@@ -190,6 +189,19 @@ static inline void reqsk_queue_add(struct request_sock_queue *queue,
 	queue->rskq_accept_tail = req;
 	req->dl_next = NULL;
 }
+
+#ifdef FT_POPCORN
+static inline struct request_sock *reqsk_queue_find_remove(struct request_sock_queue *queue, __be32 daddr, __be16 dport)
+{       
+	return ft_reqsk_queue_find_remove(queue, daddr, dport);
+}
+
+static inline struct request_sock *reqsk_queue_find(struct request_sock_queue *queue, __be32 daddr, __be16 dport)
+{
+	return ft_reqsk_queue_find(queue, daddr, dport);
+}
+
+#endif
 
 static inline struct request_sock *reqsk_queue_remove(struct request_sock_queue *queue)
 {

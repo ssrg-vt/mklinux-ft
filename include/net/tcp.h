@@ -45,6 +45,7 @@
 #include <net/dst.h>
 
 #include <linux/seq_file.h>
+#include <linux/ft_replication.h>
 
 extern struct inet_hashinfo tcp_hashinfo;
 
@@ -102,9 +103,16 @@ extern void tcp_time_wait(struct sock *sk, int state, int timeo);
 
 #define TCP_SYNACK_RETRIES 5	/* number of times to retry passive opening a
 				 * connection: ~180sec is RFC minimum	*/
+#ifdef FT_POPCORN
+
+#define TCP_TIMEWAIT_LEN (1*HZ)
+
+#else
 
 #define TCP_TIMEWAIT_LEN (60*HZ) /* how long to wait to destroy TIME-WAIT
 				  * state, about 60 seconds	*/
+#endif
+
 #define TCP_FIN_TIMEOUT	TCP_TIMEWAIT_LEN
                                  /* BSD style FIN_WAIT2 deadlock breaker.
 				  * It used to be 3min, new value is 60sec,

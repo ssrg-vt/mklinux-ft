@@ -84,6 +84,7 @@
 #include <linux/fs_struct.h>
 #include <linux/slab.h>
 #include <linux/popcorn_namespace.h>
+#include <linux/ft_replication.h>
 #ifdef CONFIG_HARDWALL
 #include <asm/hardwall.h>
 #endif
@@ -2640,6 +2641,8 @@ static int proc_pid_det_state(struct seq_file *m, struct pid_namespace *pidns,
 	}
 	seq_printf(m, "\n");
 	spin_unlock(&ns->task_list_lock);
+	
+	print_all_filters();
 
 	return 0;
 }

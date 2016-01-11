@@ -105,6 +105,7 @@
 #include <linux/sockios.h>
 #include <linux/atalk.h>
 #include <linux/ft_replication.h>
+#include <linux/ft_time_breakdown.h>
 
 static int sock_no_open(struct inode *irrelevant, struct file *dontcare);
 static ssize_t sock_aio_read(struct kiocb *iocb, const struct iovec *iov,
@@ -1336,6 +1337,9 @@ SYSCALL_DEFINE3(socket, int, family, int, type, int, protocol)
 	int retval;
 	struct socket *sock;
 	int flags;
+	u64 time;
+
+	ft_start_time(&time);
 
 	/* Check the SOCK_* constants for consistency.  */
 	BUILD_BUG_ON(SOCK_CLOEXEC != O_CLOEXEC);
@@ -1360,6 +1364,10 @@ SYSCALL_DEFINE3(socket, int, family, int, type, int, protocol)
 		goto out_release;
 
 out:
+
+	ft_end_time(&time);
+	ft_update_time(&time, TIME_CREATE_SOCKET);
+
 	/* It may be already another descriptor 8) Not kernel problem. */
 	return retval;
 
@@ -1488,6 +1496,10 @@ SYSCALL_DEFINE2(listen, int, fd, int, backlog)
 	int err, fput_needed;
 	int somaxconn;
 
+	u64 time;
+	
+	ft_start_time(&time);
+	
 	sock = sockfd_lookup_light(fd, &err, &fput_needed);
 	if (sock) {
 		somaxconn = sock_net(sock->sk)->core.sysctl_somaxconn;
@@ -1504,6 +1516,10 @@ SYSCALL_DEFINE2(listen, int, fd, int, backlog)
 
 		fput_light(sock->file, fput_needed);
 	}
+
+	ft_end_time(&time);
+	ft_update_time(&time, TIME_LISTEN);
+	
 	return err;
 }
 
@@ -1577,6 +1593,10 @@ SYSCALL_DEFINE4(accept4, int, fd, struct sockaddr __user *, upeer_sockaddr,
 		if (err < 0)
 			goto out_fd;
 	}
+
+	/*if(newsock && newsock->sk && newsock->sk->ft_filter){
+		printk("%s of port %u\n", __func__, ntohs(newsock->sk->ft_filter->tcp_param.dport));
+	}*/
 
 	/* File flags are not inherited via accept() unlike another OSes. */
 
@@ -1716,6 +1736,9 @@ SYSCALL_DEFINE6(sendto, int, fd, void __user *, buff, size_t, len,
 	struct msghdr msg;
 	struct iovec iov;
 	int fput_needed;
+	u64 time;
+	
+	ft_start_time(&time);
 
 	if (len > INT_MAX)
 		len = INT_MAX;
@@ -1746,6 +1769,10 @@ SYSCALL_DEFINE6(sendto, int, fd, void __user *, buff, size_t, len,
 out_put:
 	fput_light(sock->file, fput_needed);
 out:
+
+	ft_end_time(&time);
+	ft_update_time(&time, TIME_SEND);
+
 	return err;
 }
 
@@ -1775,6 +1802,9 @@ SYSCALL_DEFINE6(recvfrom, int, fd, void __user *, ubuf, size_t, size,
 	struct sockaddr_storage address;
 	int err, err2;
 	int fput_needed;
+	u64 time;
+
+	ft_start_time(&time);
 
 	if (size > INT_MAX)
 		size = INT_MAX;
@@ -1803,6 +1833,10 @@ SYSCALL_DEFINE6(recvfrom, int, fd, void __user *, ubuf, size_t, size,
 
 	fput_light(sock->file, fput_needed);
 out:
+
+	ft_end_time(&time);
+	ft_update_time(&time, TIME_RCV);
+
 	return err;
 }
 

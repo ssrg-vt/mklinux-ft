@@ -13,6 +13,7 @@
 #include <linux/popcorn_namespace.h>
 #include <linux/ft_common_syscall_management.h>
 #include <asm/unistd_64.h>
+#include <linux/ft_time_breakdown.h>
 
 /*
  * Below lines are copied from DMP.
@@ -344,6 +345,7 @@ struct wait_syscall{
 
 struct send_syscall_work{
         struct work_struct work;
+	u64 time;
         struct ft_pop_rep *replica_group; //to know secondary replicas to whom send the msg
 	struct ft_pid sender; 
 	int syscall_id; //syscall id for that ft_pid replica
@@ -422,6 +424,10 @@ static void send_syscall_info_to_secondary_replicas_from_work(struct work_struct
         put_ft_pop_rep(my_work->replica_group);
 	
 	kfree(my_work->private);
+
+	//ft_end_time(&my_work->time);
+	//ft_update_time(&my_work->time, TIME_SEND_SYCALL);
+
         kfree(my_work);
 
 }
@@ -432,8 +438,14 @@ static void send_syscall_info_to_secondary_replicas_from_work(struct work_struct
  * The current thread will be used to send the data.
  */
 void ft_send_syscall_info(struct ft_pop_rep *replica_group, struct ft_pid *primary_pid, int syscall_id, char* syscall_info, unsigned int syscall_info_size){
+	u64 time;
+	
+	ft_start_time(&time);
 	
 	send_syscall_info_to_secondary_replicas(replica_group, &primary_pid->ft_pop_id, primary_pid->level, primary_pid->id_array, syscall_id, syscall_info, syscall_info_size);
+	
+	ft_end_time(&time);
+	ft_update_time(&time, TIME_SEND_SYCALL);
 }
 
 /* As for ft_send_syscall_info, but a worker thread will be used to send the data.
@@ -442,6 +454,10 @@ void ft_send_syscall_info(struct ft_pop_rep *replica_group, struct ft_pid *prima
  */
 void ft_send_syscall_info_from_work(struct ft_pop_rep *replica_group, struct ft_pid *primary_pid, int syscall_id, char* syscall_info, unsigned int syscall_info_size){
 	struct send_syscall_work *work;
+	u64 time;
+
+        //ft_start_time(&time);
+
 
 //FTPRINTK("%s called from pid %s\n", __func__, current->pid);
 
@@ -465,7 +481,8 @@ void ft_send_syscall_info_from_work(struct ft_pop_rep *replica_group, struct ft_
 		memcpy(work->private, syscall_info, syscall_info_size);
 	}
 	work->syscall_id= syscall_id;
-		
+	work->time= time;
+	
 	INIT_WORK( (struct work_struct*)work, send_syscall_info_to_secondary_replicas_from_work);
 
 	queue_work(ft_syscall_info_wq, (struct work_struct*)work);
@@ -514,6 +531,9 @@ void* ft_wait_for_syscall_info(struct ft_pid *secondary, int id_syscall){
 	char* key;
         int free_key= 0;
 	void* ret= NULL;
+	u64 time;
+	
+	//ft_start_time(&time);
 
 	//FTPRINTK("%s called from pid %s\n", __func__, current->pid);
 
@@ -541,7 +561,7 @@ void* ft_wait_for_syscall_info(struct ft_pid *secondary, int id_syscall){
 
                 present_info= wait_info;
                 while(present_info->populated==0){
-                        set_current_state(TASK_UNINTERRUPTIBLE);
+                        set_current_state(TASK_INTERRUPTIBLE);
                         if(present_info->populated==0);
                                 schedule();
                         set_current_state(TASK_RUNNING);
@@ -564,6 +584,9 @@ out:
         if(free_key)
                 kfree(key);
         kfree(present_info);
+	
+	//ft_end_time(&time);
+	//ft_update_time(&time, TIME_RCV_SYSCALL);
 
         return ret;
 
@@ -831,7 +854,8 @@ long syscall_hook_enter(struct pt_regs *regs)
         current->current_syscall = regs->orig_ax;
         // System call number is in orig_ax
         // Only increment the system call counter if we see one of the synchronized system calls.
-        if(ft_is_replicated(current) && (regs->orig_ax == __NR_sendto || regs->orig_ax == __NR_recvfrom || regs->orig_ax == __NR_gettimeofday)) {
+        if(ft_is_replicated(current) && (regs->orig_ax == __NR_sendto || regs->orig_ax == __NR_recvfrom || regs->orig_ax == __NR_gettimeofday
+		|| regs->orig_ax == __NR_accept) ) {
                 current->id_syscall++;
         }
         return regs->orig_ax;
