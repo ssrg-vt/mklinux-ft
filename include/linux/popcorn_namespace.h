@@ -181,7 +181,7 @@ static inline int update_token(struct popcorn_namespace *ns)
 		tick_value = atomic_read(&objPtr->task->ft_det_tick);
 		if (min_value >= tick_value) {
 #ifdef AGGRESSIVE_DET 
-			if(objPtr->task->current_syscall == 202 &&
+			if(objPtr->task->current_syscall == __NR_futex &&
 				(objPtr->task->state == TASK_INTERRUPTIBLE ||
 				 objPtr->task->state == TASK_UNINTERRUPTIBLE) &&
 				!objPtr->task->ft_det_state == FT_DET_WAIT_TOKEN) { // Skip futex

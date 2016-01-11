@@ -785,6 +785,7 @@ int notify_syscall_wakeup(struct task_struct *task, int syscall_id)
     spin_lock(&ns->task_list_lock);
     list_for_each(iter, &ns->ns_task_list.task_list_member) {
         objPtr = list_entry(iter, struct task_list, task_list_member);
+        // TODO: what is this barrier here for, we are in a locked section?
         smp_mb();
         req->ticks[task_cnt] = atomic_read(&objPtr->task->ft_det_tick);
         task_cnt++;

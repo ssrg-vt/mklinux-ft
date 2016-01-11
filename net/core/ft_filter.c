@@ -2406,104 +2406,100 @@ out:
 }
 
 static unsigned int ft_hook_after_network_layer_primary_tcp(struct net_filter_info *filter, struct sk_buff* skb){
-        long long pckt_id;
-        unsigned int ret= NF_ACCEPT;
-	struct iphdr *iph;
+    long long pckt_id;
+    unsigned int ret= NF_ACCEPT;
+    struct iphdr *iph;
 #if FT_FILTER_VERBOSE
-        char* ft_pid_printed;
-        char* filter_id_printed;
+    char* ft_pid_printed;
+    char* filter_id_printed;
 #endif
 
-        spin_lock_bh(&filter->lock);
+    spin_lock_bh(&filter->lock);
 
-        pckt_id= ++filter->local_tx;
+    pckt_id= ++filter->local_tx;
 
-        spin_unlock_bh(&filter->lock);
+    spin_unlock_bh(&filter->lock);
 
-	/* IP protocol numbers all packt that it sends sequentially from a rand number and saves
-	 * this value in id.
-	 * To hide the failure of the primary, set id to 0 always.
-	 */
-	iph = ip_hdr(skb);
-	
-	iph->id= 0;
-	ip_send_check(iph);
+    /* IP protocol numbers all packt that it sends sequentially from a rand number and saves
+     * this value in id.
+     * To hide the failure of the primary, set id to 0 always.
+     */
+    iph = ip_hdr(skb);
+
+    iph->id= 0;
+    ip_send_check(iph);
 
 #if FT_FILTER_VERBOSE
-        ft_pid_printed= print_ft_pid(&current->ft_pid);
-        filter_id_printed= print_filter_id(filter);
-        FTPRINTK("%s: pid %d ft_pid %s reached send of packet %llu in filter %s\n\n", __func__, current->pid, ft_pid_printed, pckt_id, filter_id_printed);
-        if(ft_pid_printed)
-                kfree(ft_pid_printed);
-        if(filter_id_printed)
-                kfree(filter_id_printed);
+    ft_pid_printed= print_ft_pid(&current->ft_pid);
+    filter_id_printed= print_filter_id(filter);
+    FTPRINTK("%s: pid %d ft_pid %s reached send of packet %llu in filter %s\n\n", __func__, current->pid, ft_pid_printed, pckt_id, filter_id_printed);
+    if(ft_pid_printed)
+        kfree(ft_pid_printed);
+    if(filter_id_printed)
+        kfree(filter_id_printed);
 
 #endif
 
-        return ret;
+    return ret;
 
 }
 
-unsigned int ft_hook_func_after_network_layer(unsigned int hooknum,
-                                 struct sk_buff *skb,
-                                 const struct net_device *in,
-                                 const struct net_device *out,
-                                 int (*okfn)(struct sk_buff *)){
+unsigned int ft_hook_func_after_network_layer(unsigned int hooknum, struct sk_buff *skb, const struct net_device *in, const struct net_device *out, int (*okfn)(struct sk_buff *)) {
 
-        struct iphdr *iph;
-        unsigned int ret= NF_ACCEPT;
-        struct sock *sk;
-	struct net_filter_info *filter;
+    struct iphdr *iph;
+    unsigned int ret= NF_ACCEPT;
+    struct sock *sk;
+    struct net_filter_info *filter;
 
-        if(hooknum != NF_INET_POST_ROUTING){
-                printk("ERROR: %s has been called at hooknum %d\n", __func__, hooknum);
-                goto out;
+    if(hooknum != NF_INET_POST_ROUTING){
+        printk("ERROR: %s has been called at hooknum %d\n", __func__, hooknum);
+        goto out;
+    }
+
+    /* This is the end of IP tx path, so all the iph and transporth pointers should be
+     * already correctly populated.
+     */
+
+    iph = ip_hdr(skb);
+
+    if(iph->protocol == IPPROTO_UDP
+            || iph->protocol == IPPROTO_TCP){
+
+        /* We are on the tx path, so the socket was already found,
+         * if there, it is stored in skb->sk
+         */
+        sk= skb->sk;
+        if(sk){
+            if(sk->sk_state==TCP_TIME_WAIT)
+                filter= inet_twsk(sk)->ft_filter;
+            else
+                filter= sk->ft_filter;
+
+            if(filter){
+                get_ft_filter(filter);
+
+                if(filter->type & FT_FILTER_SECONDARY_REPLICA){
+                    if (iph->protocol == IPPROTO_UDP)
+                        ret= ft_hook_after_network_layer_secondary_udp(filter, skb);
+                    else
+                        ret= ft_hook_after_network_layer_secondary_tcp(filter, skb);
+                }
+                else{
+                    if(filter->type & FT_FILTER_PRIMARY_REPLICA || filter->type & FT_FILTER_PRIMARY_AFTER_SECONDARY_REPLICA){
+                        if (iph->protocol == IPPROTO_UDP)
+                            ret= ft_hook_after_network_layer_primary_udp(filter, skb);
+                        else
+                            ret= ft_hook_after_network_layer_primary_tcp(filter, skb);
+                    }
+
+                }
+                put_ft_filter(filter);
+            }
         }
 
-	/* This is the end of IP tx path, so all the iph and transporth pointers should be
-	 * already correctly populated.
-	 */
-
-	iph = ip_hdr(skb);
-
-        if(iph->protocol == IPPROTO_UDP
-                        || iph->protocol == IPPROTO_TCP){
-                        
-			/* We are on the tx path, so the socket was already found,
-			 * if there, it is stored in skb->sk
-			 */
-			sk= skb->sk;
-                        if(sk){
-				if(sk->sk_state==TCP_TIME_WAIT)
-					filter= inet_twsk(sk)->ft_filter;
-				else
-					filter= sk->ft_filter;
-                                
-				if(filter){
-                                        get_ft_filter(filter);
-                                        
-					if(filter->type & FT_FILTER_SECONDARY_REPLICA){
-						if (iph->protocol == IPPROTO_UDP)
-                                                	ret= ft_hook_after_network_layer_secondary_udp(filter, skb);
-						else
-							ret= ft_hook_after_network_layer_secondary_tcp(filter, skb);
-                                        }
-                                        else{
-                                                if(filter->type & FT_FILTER_PRIMARY_REPLICA || filter->type & FT_FILTER_PRIMARY_AFTER_SECONDARY_REPLICA){
-							if (iph->protocol == IPPROTO_UDP)
-	                                                        ret= ft_hook_after_network_layer_primary_udp(filter, skb);
-							else
-								ret= ft_hook_after_network_layer_primary_tcp(filter, skb);
-                                                }
-						
-					}
-                                        put_ft_filter(filter);
-                                }
-                        }
-
-        }
+    }
 out:
-	return ret; 
+    return ret; 
 
 }
 
