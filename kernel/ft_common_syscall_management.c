@@ -855,6 +855,7 @@ long syscall_hook_enter(struct pt_regs *regs)
         // Only increment the system call counter if we see one of the synchronized system calls.
         if(ft_is_replicated(current) && (regs->orig_ax == __NR_sendto || regs->orig_ax == __NR_recvfrom || regs->orig_ax == __NR_gettimeofday || regs->orig_ax == __NR_epoll_wait ||
                     regs->orig_ax == __NR_read ||
+                    regs->orig_ax == __NR_poll ||
                     regs->orig_ax == __NR_accept ||
                     regs->orig_ax == __NR_write ||
                     regs->orig_ax == __NR_bind ||

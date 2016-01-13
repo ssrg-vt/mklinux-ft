@@ -266,6 +266,8 @@ int flush_send_buffer_in_filters(void);
 int send_zero_window_in_filters(void);
 int ft_ep_poll_secondary(struct epoll_event __user *events);
 int ft_ep_poll_primary(struct epoll_event __user *events, int nr_events);
+int ft_poll_secondary(struct pollfd __user *events);
+int ft_poll_primary(struct pollfd __user *events, int nr_events);
 
 #define DUMMY_DRIVER "ft_dummy_driver"
 
