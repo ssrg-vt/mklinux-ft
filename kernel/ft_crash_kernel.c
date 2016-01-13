@@ -176,7 +176,7 @@ static void process_crash_kernel_notification(struct work_struct *work){
 	//the first unsigned short of sa_data is supposed to be the port
 	offset= sizeof(unsigned short);
 	addr= (unsigned int*) (ifr.ifr_addr.sa_data+offset);
-	*addr= inet_addr("10.1.1.48");
+	*addr= inet_addr("10.1.1.47");
 
 	sock->ops->ioctl(sock, SIOCSIFADDR, (long unsigned int)&ifr);	
 

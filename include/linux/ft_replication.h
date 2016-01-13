@@ -34,6 +34,8 @@
 #define FT_PRIMARY_AFTER_SECONDARY 9
 #define FT_NEW_PRIMARY_AFTER_SECONDARY_DESCENDANT 10
 #define FT_POTENTIAL_PRIMARY_REPLICA_AFTER_SECONDARY 11
+// This one only takes effect when running deterministic system alone
+#define FT_INSIDE_NAMESPACE 12
 /****/
 
 #define WAIT_ANSWER_TIMEOUT_SECOND 5

@@ -1703,6 +1703,7 @@ void __wake_up_parent(struct task_struct *p, struct task_struct *parent)
 
 static long do_wait(struct wait_opts *wo)
 {
+	struct popcorn_namespace *ns = NULL;
 	struct task_struct *tsk;
 	int retval;
 
@@ -1724,6 +1725,15 @@ repeat:
 		goto notask;
 
 	set_current_state(TASK_INTERRUPTIBLE);
+
+	if (is_popcorn(current)) {
+		ns = current->nsproxy->pop_ns;
+		smp_mb();
+		spin_lock(&ns->task_list_lock);
+		update_token(ns);
+		spin_unlock(&ns->task_list_lock);
+	}
+
 	read_lock(&tasklist_lock);
 	tsk = current;
 	do {
@@ -1751,6 +1761,9 @@ notask:
 	}
 end:
 	__set_current_state(TASK_RUNNING);
+	if (is_popcorn(current)) {
+		det_wake_up(current);
+	}
 	remove_wait_queue(&current->signal->wait_chldexit, &wo->child_wait);
 	return retval;
 }
