@@ -19,7 +19,7 @@
 #include <asm/msr.h>
 #include <linux/time.h>
 
-#define DET_PROF 1
+//#define DET_PROF 1
 
 static struct kmem_cache *popcorn_ns_cachep;
 struct proc_dir_entry *res;

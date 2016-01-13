@@ -206,6 +206,10 @@ static inline int update_token(struct popcorn_namespace *ns)
 		if (min_value >= tick_value) {
 			if(objPtr->task->state == TASK_RUNNING ||
 				 objPtr->task->state == TASK_WAKING ||
+#ifdef AGGRESSIVE_DET
+				 objPtr->task->current_syscall == __NR_read ||
+				 objPtr->task->current_syscall == __NR_accept ||
+#endif
 				 objPtr->task->ft_det_state == FT_DET_WAIT_TOKEN) {
 				new_token = objPtr;
 				min_value = tick_value;
