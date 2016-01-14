@@ -924,6 +924,12 @@ SYSCALL_DEFINE3(poll, struct pollfd __user *, ufds, unsigned int, nfds,
 		ft_is_secondary_replica(current)) {
 		return ft_poll_secondary(ufds);
 	}
+
+	/* For primary we disable the timeout */
+	if(ft_is_replicated(current) &&
+		ft_is_primary_replica(current)) {
+		timeout_msecs = -1;
+	}
 #endif
 
 	if (timeout_msecs >= 0) {
