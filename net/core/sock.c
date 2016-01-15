@@ -1163,6 +1163,9 @@ static void __sk_free(struct sock *sk)
 
 #ifdef FT_POPCORN
         if(sk->ft_filter){
+		spin_lock_bh(&sk->ft_filter->lock);
+		sk->ft_filter->ft_sock= NULL;
+		spin_unlock_bh(&sk->ft_filter->lock);
 		put_ft_filter(sk->ft_filter);
 		sk->ft_filter= NULL;                 
         }
