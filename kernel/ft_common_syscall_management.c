@@ -535,7 +535,7 @@ void* ft_wait_for_syscall_info(struct ft_pid *secondary, int id_syscall){
 	
 	//ft_start_time(&time);
 
-	//FTPRINTK("%s called from pid %s\n", __func__, current->pid);
+	FTPRINTK("%s called from pid %s\n", __func__, current->pid);
 
 	key= ft_syscall_get_key_from_ft_pid(secondary, id_syscall);
         if(!key)
@@ -703,7 +703,7 @@ static int handle_syscall_info_msg(struct pcn_kmsg_message* inc_msg){
 
 	/* retrive variable data length field (syscall_info)*/
 	private= &msg->data;
-
+	//printk("%s rcv %d\n",__func__,  msg->syscall_id);
 	/* retrive key for this syscall in hash_table*/
         key= ft_syscall_get_key(&msg->ft_pop_id, msg->level, msg->id_array, msg->syscall_id);
         if(!key)
@@ -733,9 +733,14 @@ static int handle_syscall_info_msg(struct pcn_kmsg_message* inc_msg){
         wait_info->populated= 1;
 
         if((present_info= ((struct wait_syscall*) ft_syscall_hash_add(key, (void*) wait_info)))){
+			    if (present_info->task == NULL) {
+					printk("ERROR PRESENT INFO TASK IS NULL %d\n", msg->syscall_id);
+				} else {
                 present_info->private= wait_info->private;
+				//printk("%s waking up %d\n",__func__,  msg->syscall_id);
                 present_info->populated= 1;
                 wake_up_process(present_info->task);
+				}
 		kfree(key);
 		kfree(wait_info);
         }
@@ -761,7 +766,7 @@ static int handle_syscall_wake_up_info_msg(struct pcn_kmsg_message* inc_msg)
 
     /* The message will be freed by the dequeuer */
     req = (struct sleeping_syscall_request*) inc_msg;
-    printk("Incoming message for synchronizing wake up %d\n", req->ft_pid.ft_pop_id.id);
+    //printk("Incoming message for synchronizing wake up %d\n", req->ft_pid.ft_pop_id.id);
     for_each_process(task) {
         if (task->ft_pid.ft_pop_id.kernel == req->ft_pid.ft_pop_id.kernel &&
                 task->ft_pid.ft_pop_id.id == req->ft_pid.ft_pop_id.id) {
@@ -804,7 +809,7 @@ int notify_syscall_wakeup(struct task_struct *task, int syscall_id)
 
     req->syscall_id = syscall_id;
     req->det_process_count = ns->task_count;
-    printk("primary notifies wake up on %d of %d\n", task->current_syscall, task->pid);
+    //printk("primary notifies wake up on %d of %d\n", task->current_syscall, task->pid);
     spin_lock(&ns->task_list_lock);
     list_for_each(iter, &ns->ns_task_list.task_list_member) {
         objPtr = list_entry(iter, struct task_list, task_list_member);
@@ -838,7 +843,7 @@ void wait_for_wakeup(struct task_struct *task, int syscall_id)
         if (req != NULL &&
                 task->ft_pid.ft_pop_id.kernel == req->ft_pid.ft_pop_id.kernel &&
                 task->ft_pid.ft_pop_id.id == req->ft_pid.ft_pop_id.id) {
-            printk("secondary wakes up on %d of %d\n", task->current_syscall, task->pid);
+            //printk("secondary wakes up on %d of %d\n", task->current_syscall, task->pid);
             break;
         }
         schedule();
@@ -853,11 +858,11 @@ long syscall_hook_enter(struct pt_regs *regs)
         current->current_syscall = regs->orig_ax;
         // System call number is in orig_ax
         // Only increment the system call counter if we see one of the synchronized system calls.
+        // read and write are handled in the socket layer
         if(ft_is_replicated(current) && (regs->orig_ax == __NR_sendto || regs->orig_ax == __NR_recvfrom || regs->orig_ax == __NR_gettimeofday || regs->orig_ax == __NR_epoll_wait ||
-                    regs->orig_ax == __NR_read ||
+                    regs->orig_ax == __NR_time ||
                     regs->orig_ax == __NR_poll ||
                     regs->orig_ax == __NR_accept ||
-                    regs->orig_ax == __NR_write ||
                     regs->orig_ax == __NR_bind ||
                     regs->orig_ax == __NR_listen)) {
                 printk("Syscall %d on %d\n", regs->orig_ax, current->pid);

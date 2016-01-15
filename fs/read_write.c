@@ -467,14 +467,12 @@ SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
 	int fput_needed;
 
 	file = fget_light(fd, &fput_needed);
-	__det_start(current);
 	if (file) {
 		loff_t pos = file_pos_read(file);
 		ret = vfs_read(file, buf, count, &pos);
 		file_pos_write(file, pos);
 		fput_light(file, fput_needed);
 	}
-	__det_end(current);
 
 	return ret;
 }

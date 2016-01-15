@@ -268,6 +268,8 @@ int ft_ep_poll_secondary(struct epoll_event __user *events);
 int ft_ep_poll_primary(struct epoll_event __user *events, int nr_events);
 int ft_poll_secondary(struct pollfd __user *events);
 int ft_poll_primary(struct pollfd __user *events, int nr_events);
+time_t ft_time_secondary(time_t __user *tloc);
+time_t ft_time_primary(time_t __user *tloc);
 
 #define DUMMY_DRIVER "ft_dummy_driver"
 
