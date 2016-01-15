@@ -79,7 +79,7 @@ SYSCALL_DEFINE1(time, time_t __user *, tloc)
 #ifdef FT_POPCORN
 	if(ft_is_replicated(current) &&
 		ft_is_primary_replica(current)) {
-		ft_time_primary(tloc);
+		ft_time_primary(tloc, i);
 	}
 #endif
 	return i;

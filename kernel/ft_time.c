@@ -149,15 +149,21 @@ long ft_gettimeofday(struct timeval __user * tv, struct timezone __user * tz){
 
 }
 
-time_t ft_time_primary(time_t __user *tloc)
-{
-	time_t *timeinfo;
+struct time_info {
+	time_t tloc;
+	long   ret;
+};
 
-	timeinfo = kmalloc(sizeof(time_t), GFP_KERNEL);
-	get_user(*timeinfo, tloc);
+long ft_time_primary(time_t __user *tloc, long ret)
+{
+	struct time_info *timeinfo;
+
+	timeinfo = kmalloc(sizeof(struct time_info), GFP_KERNEL);
+	get_user(timeinfo->tloc, tloc);
+	timeinfo->ret = ret;
 
 	if(is_there_any_secondary_replica(current->ft_popcorn)){
-		ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, timeinfo, sizeof(time_t));
+		ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, timeinfo, sizeof(struct time_info));
 	}
 
 	kfree(timeinfo);
@@ -166,15 +172,15 @@ time_t ft_time_primary(time_t __user *tloc)
 
 }
 
-time_t ft_time_secondary(time_t __user *tloc)
+long ft_time_secondary(time_t __user *tloc)
 {
-	time_t *timeinfo;
-	time_t ret;
+	struct time_info *timeinfo;
+	long ret;
 
 	printk("waiting time for syscall %d\n", current->id_syscall);
-	timeinfo = (time_t *) ft_wait_for_syscall_info(&current->ft_pid, current->id_syscall);
-	ret = *timeinfo;
-	put_user(ret, tloc);
+	timeinfo = (struct time_info *) ft_wait_for_syscall_info(&current->ft_pid, current->id_syscall);
+	ret = timeinfo->ret;
+	put_user(timeinfo->tloc, tloc);
 	kfree(timeinfo);
 
 	return ret;
