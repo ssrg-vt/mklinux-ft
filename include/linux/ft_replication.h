@@ -169,6 +169,7 @@ struct net_filter_info{
 	/*those fields could be collapsed on a union...*/
 	struct sock* ft_sock;
 	struct request_sock* ft_req; //to use only if it is still a minisocket at the place of ft_sock
+	int req_added;
 	struct inet_timewait_sock* ft_time_wait; //to use only when in TCP_TIME_WAIT and struct sock is beeing substituted by a struct inet_timewait_sock	
 
 	/* NOTE creator and id compose the identifier.
@@ -203,6 +204,7 @@ struct net_filter_info{
 	 */
 	int deliver_packets;
 	int ft_primary_closed;
+	int ft_tcp_closed;
         int ft_pending_packets;
 
 	struct stable_buffer *stable_buffer;
@@ -272,6 +274,7 @@ struct tcp_request_sock;
 void print_all_filters(void);
 int create_filter(struct task_struct *task, struct sock *sk, gfp_t priority);
 void ft_listen_init(struct sock* sk);
+void ft_notify_req_added(struct net_filter_info* filter, int added);
 //int create_filter_accept(struct task_struct *task, struct socket *newsock,struct socket *sock);
 void ft_grown_mini_filter(struct sock* sk, struct request_sock *req);
 int ft_create_mini_filter(struct request_sock *req, struct sock *sk, struct sk_buff *skb);

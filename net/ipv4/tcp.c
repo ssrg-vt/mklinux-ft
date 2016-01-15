@@ -266,6 +266,7 @@
 #include <linux/crypto.h>
 #include <linux/time.h>
 #include <linux/slab.h>
+#include <linux/ft_replication.h>
 
 #include <net/icmp.h>
 #include <net/tcp.h>
@@ -2027,6 +2028,13 @@ adjudge_to_death:
 		inet_csk_destroy_sock(sk);
 	/* Otherwise, socket is reprieved until protocol close. */
 
+#ifdef FT_POPCORN
+	if(sk->ft_filter){
+		spin_lock_bh(&sk->ft_filter->lock);
+		sk->ft_filter->ft_tcp_closed=1;
+		spin_unlock_bh(&sk->ft_filter->lock);
+	}
+#endif
 out:
 	bh_unlock_sock(sk);
 	local_bh_enable();

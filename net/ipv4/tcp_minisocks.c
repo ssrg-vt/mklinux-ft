@@ -756,7 +756,7 @@ struct sock *tcp_check_req(struct sock *sk, struct sk_buff *skb,
 	inet_csk_reqsk_queue_add(sk, req, child);
 
 #ifdef FT_POPCORN
-        ft_activate_grown_filter(child->ft_filter);
+       // ft_activate_grown_filter(child->ft_filter);
 #endif
 
 	return child;

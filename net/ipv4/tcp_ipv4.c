@@ -1449,9 +1449,15 @@ int tcp_v4_conn_request(struct sock *sk, struct sk_buff *skb)
 
 	inet_csk_reqsk_queue_hash_add(sk, req, TCP_TIMEOUT_INIT);
 
+#ifdef FT_POPCORN
+	ft_notify_req_added(req->ft_filter, 1);
+#endif
 	return 0;
 
 drop_and_release:
+#ifdef FT_POPCORN
+	ft_notify_req_added(req->ft_filter, 0);
+#endif
 	dst_release(dst);
 drop_and_free:
 	reqsk_free(req);
@@ -1659,7 +1665,6 @@ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 		goto csum_err;
 
 	if (sk->sk_state == TCP_LISTEN) {
-
 		struct sock *nsk = tcp_v4_hnd_req(sk, skb);
 		if (!nsk)
 			goto discard;
@@ -1670,7 +1675,11 @@ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 				rsk = nsk;
 				goto reset;
 			}
+#ifdef FT_POPCORN
+			ft_activate_grown_filter(nsk->ft_filter);
+#endif
 			return 0;
+
 		}
 	} else
 		sock_rps_save_rxhash(sk, skb);

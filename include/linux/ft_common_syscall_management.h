@@ -40,10 +40,10 @@ struct wake_up_buffer {
 
 static inline void enqueue_wake_up (struct wake_up_buffer *buf, 
 		struct sleeping_syscall_request *req) {
-
+	int head;
 	down_interruptible(&(buf->queue_full));
 	spin_lock(&(buf->enqueue_lock));
-	int head = buf->queue_head;
+	head = buf->queue_head;
 
 	buf->wake_up_queue[head] = req;
 
@@ -55,10 +55,10 @@ static inline void enqueue_wake_up (struct wake_up_buffer *buf,
 
 static inline struct sleeping_syscall_request *dequeue_wake_up(struct wake_up_buffer *buf) {
 	struct sleeping_syscall_request *req;
-
+	int tail;
 	down_interruptible(&(buf->queue_empty));
 	spin_lock(&(buf->dequeue_lock));
-	int tail = buf->queue_tail;
+	tail = buf->queue_tail;
 
 	smp_mb();
 	req = buf->wake_up_queue[tail];
@@ -73,9 +73,9 @@ static inline struct sleeping_syscall_request *dequeue_wake_up(struct wake_up_bu
 
 static inline struct sleeping_syscall_request *peek_wake_up(struct wake_up_buffer *buf) {
 	struct sleeping_syscall_request *req;
-
+	int tail;
 	spin_lock(&(buf->dequeue_lock));
-	int tail = buf->queue_tail;
+	tail = buf->queue_tail;
 
 	smp_mb();
 	req = buf->wake_up_queue[tail];

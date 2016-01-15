@@ -64,9 +64,9 @@ static inline void dump_task_list(struct popcorn_namespace *ns)
 	list_for_each(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		if (ns->token != NULL && objPtr->task == ns->token->task)
-			printk("%d(%d)[%d][%d]<%d>[o] -> ", objPtr->task->pid, atomic_read(&objPtr->task->ft_det_tick), objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall);
+			printk("%d(%d)[%ld][%d]<%ld>[o] -> ", objPtr->task->pid, atomic_read(&objPtr->task->ft_det_tick), objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall);
 		else
-			printk("%d(%d)[%d][%d]<%d>[x] -> ", objPtr->task->pid, atomic_read(&objPtr->task->ft_det_tick), objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall);
+			printk("%d(%d)[%ld][%d]<%ld>[x] -> ", objPtr->task->pid, atomic_read(&objPtr->task->ft_det_tick), objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall);
 	}
 	printk("\n");
 	spin_unlock(&ns->task_list_lock);
@@ -127,8 +127,9 @@ static inline int set_token(struct popcorn_namespace *ns, struct task_struct *ta
 static inline int add_task_to_ns(struct popcorn_namespace *ns, struct task_struct *task)
 {
 	unsigned long flags;
-	printk("Add %x, %d to ns\n", task, task->pid);
-	struct task_list *new_task = kmalloc(sizeof(struct task_list), GFP_KERNEL);
+	struct task_list *new_task;
+	//printk("Add %x, %d to ns\n", (unsigned long) task, task->pid);
+	new_task = kmalloc(sizeof(struct task_list), GFP_KERNEL);
 	if (new_task == NULL)
 		return -1;
 
@@ -226,7 +227,7 @@ static inline int update_tick(struct task_struct *task, long tick)
 static inline void det_wake_up(struct task_struct *task)
 {
 	unsigned long flags;
-	int tick;
+	//int tick;
 	struct popcorn_namespace *ns;
 
 	ns = task->nsproxy->pop_ns;
