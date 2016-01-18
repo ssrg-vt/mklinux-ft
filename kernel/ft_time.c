@@ -177,7 +177,7 @@ long ft_time_secondary(time_t __user *tloc)
 	struct time_info *timeinfo;
 	long ret;
 
-	printk("waiting time for syscall %d\n", current->id_syscall);
+	FTPRINTK("waiting time for syscall %d\n", current->id_syscall);
 	timeinfo = (struct time_info *) ft_wait_for_syscall_info(&current->ft_pid, current->id_syscall);
 	ret = timeinfo->ret;
 	put_user(timeinfo->tloc, tloc);

@@ -60,7 +60,6 @@ int ft_poll_primary(struct pollfd __user *events, int nr_events)
 	}
 	
 	if(is_there_any_secondary_replica(current->ft_popcorn)){
-		printk("sending %d events for syscall %d %d\n", nr_events, current->id_syscall, current->pid);
 		ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) pinfo, pinfo_size);
 	}
 
@@ -78,7 +77,6 @@ int ft_poll_secondary(struct pollfd __user *events)
 	int i;
 	struct poll_wait_info *pinfo = NULL;
 
-	printk("waiting events for syscall %d %d\n", current->id_syscall, current->pid);
 	pinfo = (struct poll_wait_info *) ft_wait_for_syscall_info(&current->ft_pid, current->id_syscall);
 
 	if (!pinfo) {
@@ -95,7 +93,6 @@ int ft_poll_secondary(struct pollfd __user *events)
 	}
 
 	ret = pinfo->nr_events;
-	printk("got %d events\n", ret);
 	kfree(pinfo);
 
 	return ret;

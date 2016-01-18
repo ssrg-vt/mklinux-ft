@@ -281,7 +281,7 @@ static int after_syscall_rcv_family_primary_after_secondary(struct kiocb *iocb, 
 					goto out;
 				}
 				where_to_copy[data_size]='\0';
-				printk("%s: data %s size %d\n", __func__, where_to_copy, data_size);
+				FTPRINTK("%s: data %s size %d\n", __func__, where_to_copy, data_size);
 		}
 		#endif
 		/*TODO
@@ -357,7 +357,7 @@ static int after_syscall_rcv_family_primary(struct kiocb *iocb, struct socket *s
 					goto out;
 				}
 				where_to_copy[data_size]='\0';
-				printk("%s: data %s size %d\n", __func__, where_to_copy, data_size);
+				FTPRINTK("%s: data %s size %d\n", __func__, where_to_copy, data_size);
 		}
 		#endif
 
@@ -370,7 +370,7 @@ static int after_syscall_rcv_family_primary(struct kiocb *iocb, struct socket *s
 		 * In here the lock already have been released, but the data was copied while holding it.
 		 * In secondary replicas, if retriving data from the stable buffer, the same order of access to the stable buffer must be ensured.
 		 */
-		printk("%s pid %d syscall_id %d sending size %d flags %d csum %d ret %d \n", __func__, current->pid, current->id_syscall, syscall_info->size, syscall_info->flags, syscall_info->csum, syscall_info->ret);
+		FTPRINTK("%s pid %d syscall_id %d sending size %d flags %d csum %d ret %d \n", __func__, current->pid, current->id_syscall, syscall_info->size, syscall_info->flags, syscall_info->csum, syscall_info->ret);
 		ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) syscall_info, sizeof(*syscall_info)+ data_size);
 out:
 		kfree(syscall_info);
@@ -525,7 +525,7 @@ static int before_syscall_rcv_family_primary_after_secondary(struct kiocb *iocb,
 			       	goto out;
 			}
                        	app[data_size]='\0';
-			printk("%s: data %s size %d\n", __func__, app, data_size);
+			FTPRINTK("%s: data %s size %d\n", __func__, app, data_size);
 			kfree(app);
 			
 			#endif			 
@@ -616,7 +616,7 @@ out:
 						goto out2;
 					}
 					where_to_copy[data_size]='\0';
-					printk("%s: data %s size %d\n", __func__, where_to_copy, data_size);
+					FTPRINTK("%s: data %s size %d\n", __func__, where_to_copy, data_size);
 				}
 				#endif
 
@@ -744,7 +744,7 @@ static int before_syscall_rcv_family_secondary(struct kiocb *iocb, struct socket
 			       	goto out;
 			}
                        	app[data_size]='\0';
-			printk("%s: data %s size %d\n", __func__, app, data_size);
+			FTPRINTK("%s: data %s size %d\n", __func__, app, data_size);
 			kfree(app);
 
 			#endif			
@@ -901,7 +901,7 @@ static int before_syscall_send_family_primary_after_secondary(struct kiocb *iocb
                                 goto out;
                         }
                         app[iov[i].iov_len]='\0';
-                        printk("%s: data %s\n",__func__,app);
+                        FTPRINTK("%s: data %s\n",__func__,app);
                         kfree(app);
                 }
 		#endif
@@ -943,7 +943,7 @@ static int before_syscall_send_family_primary_after_secondary(struct kiocb *iocb
 				goto out2;
 			}
 			app[iov[i].iov_len]='\0';
-			printk("%s: data %s\n",__func__,app);
+			FTPRINTK("%s: data %s\n",__func__,app);
 			kfree(app);
 		}
 
@@ -1037,7 +1037,7 @@ static int before_syscall_send_family_primary(struct kiocb *iocb, struct socket 
                         goto out;
 		}
 		app[iov[i].iov_len]='\0';
-		printk("%s: data %s\n",__func__,app);
+		FTPRINTK("%s: data %s\n",__func__,app);
 	        kfree(app);
         }
 

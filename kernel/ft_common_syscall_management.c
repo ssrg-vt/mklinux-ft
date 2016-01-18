@@ -865,7 +865,7 @@ long syscall_hook_enter(struct pt_regs *regs)
                     regs->orig_ax == __NR_accept ||
                     regs->orig_ax == __NR_bind ||
                     regs->orig_ax == __NR_listen)) {
-                printk("Syscall %d on %d\n", regs->orig_ax, current->pid);
+                FTPRINTK("Syscall %d on %d\n", regs->orig_ax, current->pid);
                 current->id_syscall++;
         }
         return regs->orig_ax;
