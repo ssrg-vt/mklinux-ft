@@ -206,6 +206,7 @@ struct net_filter_info{
 	int ft_primary_closed;
 	int ft_tcp_closed;
         int ft_pending_packets;
+	struct list_head pending_work;
 
 	struct stable_buffer *stable_buffer;
 	struct send_buffer *send_buffer;
