@@ -231,7 +231,10 @@ int ft_is_primary_after_secondary_replica(struct task_struct *task);
 void ft_modify_replica_type(struct task_struct *tsk, int type);
 int update_replica_type_after_failure(void);
 struct pcn_kmsg_long_message;
+struct pcn_kmsg_message;
+struct rx_copy_msg;
 void send_to_all_secondary_replicas(struct ft_pop_rep* ft_popcorn, struct pcn_kmsg_long_message* msg, int msg_size);
+void send_to_all_secondary_replicas_xlwu(struct ft_pop_rep* ft_popcorn, const struct sk_buff *skb, struct rx_copy_msg *msg, int msg_size);
 int is_there_any_secondary_replica(struct ft_pop_rep* ft_popcorn);
 
 int maybe_create_replicas(void);

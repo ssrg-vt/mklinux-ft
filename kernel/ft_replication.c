@@ -526,6 +526,42 @@ void send_to_all_secondary_replicas(struct ft_pop_rep* ft_popcorn, struct pcn_km
 
 }
 
+void send_to_all_secondary_replicas_xlwu(struct ft_pop_rep* ft_popcorn,const struct sk_buff *skb, struct rx_copy_msg* msg, int msg_size){
+        struct list_head *iter= NULL;
+        struct replica_id secondary_replica;
+        struct replica_id_list* objPtr;
+
+        list_for_each(iter, &ft_popcorn->secondary_replicas_head.replica_list_member) {
+                objPtr = list_entry(iter, struct replica_id_list, replica_list_member);
+                secondary_replica= objPtr->replica;
+//pcn_kmsg_send(secondary_replica.kernel, (struct pcn_kmsg_message *)msg);
+                if(pcn_kmsg_send_skb_xlwu(secondary_replica.kernel, skb, msg, 0)==-1){
+                        printk("ERROR: %s impossible to send to cpu %d\n", __func__, secondary_replica.kernel);
+                }
+
+        }
+
+}
+
+
+/*void send_to_second_kernel(struct ft_pop_rep* ft_popcorn, const char* data, unsigned long len){
+        struct list_head *iter= NULL;
+        struct replica_id secondary_replica;
+        struct replica_id_list* objPtr;
+
+        list_for_each(iter, &ft_popcorn->secondary_replicas_head.replica_list_member) {
+                objPtr = list_entry(iter, struct replica_id_list, replica_list_member);
+                secondary_replica= objPtr->replica;
+
+                if(pcn_kmsg_send_long_xlwu(secondary_replica.kernel, data, len)==-1){
+                        printk("ERROR: %s impossible to send to cpu %d\n", __func__, secondary_replica.kernel);
+                }
+
+        }
+
+}*/
+
+
 /* Checks wheter there is any secondary replica in the system.
  *
  */
