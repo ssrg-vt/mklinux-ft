@@ -20,6 +20,7 @@
 #include <linux/audit.h>
 #include <linux/syscalls.h>
 #include <linux/fcntl.h>
+#include <linux/popcorn_namespace.h>
 
 #include <asm/uaccess.h>
 #include <asm/ioctls.h>
@@ -89,6 +90,7 @@ void pipe_double_lock(struct pipe_inode_info *pipe1,
 /* Drop the inode semaphore and wait for a pipe event, atomically */
 void pipe_wait(struct pipe_inode_info *pipe)
 {
+	struct popcorn_namespace *ns = NULL;
 	DEFINE_WAIT(wait);
 
 	/*
@@ -96,10 +98,20 @@ void pipe_wait(struct pipe_inode_info *pipe)
 	 * is considered a noninteractive wait:
 	 */
 	prepare_to_wait(&pipe->wait, &wait, TASK_INTERRUPTIBLE);
+	if (is_popcorn(current)) {
+		ns = current->nsproxy->pop_ns;
+		smp_mb();
+		spin_lock(&ns->task_list_lock);
+		update_token(ns);
+		spin_unlock(&ns->task_list_lock);
+	}
 	pipe_unlock(pipe);
 	schedule();
 	finish_wait(&pipe->wait, &wait);
 	pipe_lock(pipe);
+	if (is_popcorn(current)) {
+		det_wake_up(current);
+	}
 }
 
 static int

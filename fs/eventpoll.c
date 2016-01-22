@@ -1699,6 +1699,12 @@ SYSCALL_DEFINE4(epoll_wait, int, epfd, struct epoll_event __user *, events,
 		printk("waiting on epfd %d\n", epfd);
 		return ft_ep_poll_secondary(events);
 	}
+
+	/* For primary we disable the timeout */
+	if(ft_is_replicated(current) &&
+		ft_is_primary_replica(current)) {
+		timeout = -1;
+	}
 #endif
 
 	/* The maximum number of event must be greater than zero */

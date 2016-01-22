@@ -26,6 +26,7 @@
 #include <linux/fs.h>
 #include <linux/rcupdate.h>
 #include <linux/hrtimer.h>
+#include <linux/ft_replication.h>
 
 #include <asm/uaccess.h>
 
@@ -917,6 +918,20 @@ SYSCALL_DEFINE3(poll, struct pollfd __user *, ufds, unsigned int, nfds,
 	struct timespec end_time, *to = NULL;
 	int ret;
 
+#ifdef FT_POPCORN
+	/* Retrive epoll info from primary */
+	if(ft_is_replicated(current) &&
+		ft_is_secondary_replica(current)) {
+		return ft_poll_secondary(ufds);
+	}
+
+	/* For primary we disable the timeout */
+	if(ft_is_replicated(current) &&
+		ft_is_primary_replica(current)) {
+		timeout_msecs = -1;
+	}
+#endif
+
 	if (timeout_msecs >= 0) {
 		to = &end_time;
 		poll_select_set_timeout(to, timeout_msecs / MSEC_PER_SEC,
@@ -942,6 +957,15 @@ SYSCALL_DEFINE3(poll, struct pollfd __user *, ufds, unsigned int, nfds,
 
 		ret = -ERESTART_RESTARTBLOCK;
 	}
+
+#ifdef FT_POPCORN
+	/* Send it to replica */
+	if(ft_is_replicated(current) &&
+		ft_is_primary_replica(current)) {
+		ft_poll_primary(ufds, ret);
+	}
+#endif
+
 	return ret;
 }
 

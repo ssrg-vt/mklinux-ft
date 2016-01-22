@@ -34,6 +34,8 @@
 #define FT_PRIMARY_AFTER_SECONDARY 9
 #define FT_NEW_PRIMARY_AFTER_SECONDARY_DESCENDANT 10
 #define FT_POTENTIAL_PRIMARY_REPLICA_AFTER_SECONDARY 11
+// This one only takes effect when running deterministic system alone
+#define FT_INSIDE_NAMESPACE 12
 /****/
 
 #define WAIT_ANSWER_TIMEOUT_SECOND 5
@@ -267,6 +269,10 @@ int flush_send_buffer_in_filters(void);
 int send_zero_window_in_filters(void);
 int ft_ep_poll_secondary(struct epoll_event __user *events);
 int ft_ep_poll_primary(struct epoll_event __user *events, int nr_events);
+int ft_poll_secondary(struct pollfd __user *events);
+int ft_poll_primary(struct pollfd __user *events, int nr_events);
+long ft_time_secondary(time_t __user *tloc);
+long ft_time_primary(time_t __user *tloc, long ret);
 
 #define DUMMY_DRIVER "ft_dummy_driver"
 
