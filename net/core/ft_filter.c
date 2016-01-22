@@ -6290,7 +6290,7 @@ int send_zero_window_in_filters(void){
 int flush_pending_pckt_in_filters(void){
 	int i;
 	
-	for(i=0; i< PCKT_DISP_POOL_SIZE; i++){
+	for(i=0; i< PCKT_DISP_POOL_SIZE+1; i++){
 		drain_workqueue(pckt_dispatcher_pool[i]);
 	}
 

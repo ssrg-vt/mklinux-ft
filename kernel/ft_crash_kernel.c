@@ -19,7 +19,7 @@ struct crash_kernel_notification_msg{
         struct pcn_kmsg_hdr header;
 };
 
-static struct workqueue_struct *crash_wq;
+struct workqueue_struct *crash_wq;
 
 extern int _cpu;
 extern int pci_dev_list_remove(int compatible, char *vendor, char *model,
@@ -48,7 +48,7 @@ void print_time(unsigned long long time[], int size_time){
 	
 }
 
-static void process_crash_kernel_notification(struct work_struct *work){
+void process_crash_kernel_notification(struct work_struct *work){
 	struct pci_dev *dev;
 	struct pci_dev *prev;
 	int found, fd, offset;
@@ -60,7 +60,7 @@ static void process_crash_kernel_notification(struct work_struct *work){
 	unsigned long long time[7];
 	unsigned long long start_up,start_addr;
 	
-	//printk("%s called\n", __func__);
+	printk("%s called\n", __func__);
 
 	//0=> func total time 
 	time[0]= cpu_clock(_cpu);
@@ -283,6 +283,7 @@ asmlinkage long sys_ft_crash_kernel(void)
 			//local_bh_disable();
 			//send message to all kernel to notify them that this one is crashing
 			//this should be automatically detected from other kernels using heartbeat
+			smp_send_stop();
 			send_crash_kernel_msg();
 			//send_zero_window_in_filters();
 			//hang the cpu (for now I am assuming the kernel is running on a single core

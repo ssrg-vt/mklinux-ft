@@ -401,12 +401,17 @@ static int do_keepalive(void)
 	return rc;
 }
 
+extern struct workqueue_struct *crash_wq;
+extern void process_crash_kernel_notification(struct work_struct *work);
+
 #define VALIDITY_WIN 4
 void keepalive_timer (unsigned long arg)
 {
 	int i;
 	unsigned long now = jiffies;
-
+	static int dead= 0;
+	struct work_struct* work;
+	
 	do_keepalive();
 
 	for (i=0; i<POPCORN_MAX_CPUS; i++) {
@@ -418,13 +423,28 @@ void keepalive_timer (unsigned long arg)
 				KMSG_ERR("POPCORN: Keepalive msg failed for CPU %d! Kernel is dead \n", i);
 				KMSG_ERR("POPCORN: last beacon at %ld, now %ld, validity win %ld\n",
 					rkvirt_timeout[i], now, (now -tdelay*2));
+				if(system_state	== SYSTEM_RUNNING)
+					dead++;
 			}
 		// TODO here we should create a notification mechanism for the upper layers ..
 		// the messaging layer should be able to propagate itself when a connection drops
 	}
 
-	keepalive_tl.expires = jiffies + tdelay;
-	add_timer(&keepalive_tl);
+	if(dead==1){
+		printk("adding work\n");
+	        work= kmalloc(sizeof(*work), GFP_ATOMIC);
+        	if(!work)
+                	return;
+
+        	INIT_WORK(work, process_crash_kernel_notification);
+        	queue_work(crash_wq, work);
+		
+	}
+	else{
+		printk("new timer\n");
+		keepalive_tl.expires = jiffies + tdelay;
+		add_timer(&keepalive_tl);
+	}
 }
 
 /*****************************************************************************/
@@ -683,13 +703,6 @@ if (ROUND_PAGE_SIZE(sizeof(struct pcn_kmsg_window)) > KMALLOC_MAX_SIZE)
 		}
 	} 
 
-	/* start timer for keepalive functionality */
-	init_timer(&keepalive_tl);
-	keepalive_tl.data = (unsigned long ) 0;
-	keepalive_tl.function = keepalive_timer;
-	keepalive_tl.expires = jiffies + tdelay; // TODO tdelay should be in jiffies
-	add_timer(&(keepalive_tl));
-
 	/* if everything is ok create a proc interface */
 	struct proc_dir_entry *res;
 	res = create_proc_entry("pcnmsg", S_IRUGO, NULL);
@@ -705,6 +718,14 @@ if (ROUND_PAGE_SIZE(sizeof(struct pcn_kmsg_window)) > KMALLOC_MAX_SIZE)
 		return -ENOMEM;
 	}
 	res->read_proc = peers_read_proc;
+
+	//crash_wq= create_singlethread_workqueue("crash_wq");
+	/* start timer for keepalive functionality */
+        init_timer(&keepalive_tl);
+        keepalive_tl.data = (unsigned long ) 0;
+        keepalive_tl.function = keepalive_timer;
+        keepalive_tl.expires = jiffies + (tdelay*100); // TODO tdelay should be in jiffies
+        //add_timer(&(keepalive_tl));
 
 	return 0;
 }
