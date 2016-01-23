@@ -1264,31 +1264,56 @@ static int process_small_message(struct pcn_kmsg_reverse_message *msg)
 	return work_done;
 }
 
+//NOTE  the following is right now in ticks
+#define FORCED_TIMEOUT 2000000l
 static int pcn_kmsg_poll_handler(void)
 {
 	struct pcn_kmsg_reverse_message *msg;
 	struct pcn_kmsg_window *win = rkvirt[my_cpu]; // TODO this will not work for clustering
 	int work_done = 0;
+	int forced =0; // TODO fetch this value from a configuration it should be protected or atomically changed
+	int ret =0;
+	unsigned long timeout =0;
 
 	KMSG_PRINTK("called\n");
+
+	// TODO Here fetch the value of forced
+	timeout =  (forced ? FORCED_TIMEOUT : ~0); //infinite if is not forced
 
 pull_msg:
 	/* Get messages out of the buffer first */
 //#define PCN_KMSG_BUDGET 128
 	//while ((work_done < PCN_KMSG_BUDGET) && (!win_get(rkvirt[my_cpu], &msg))) {
-	while (! win_get(win, &msg) ) {
+	//while ( win_get(win, &msg) ) {
+	while ( (ret = win_get_common(win, &msg, forced, &timeout)) != -1 ) {
 		KMSG_PRINTK("got a message!\n");
 
-		/* Special processing for large messages */
-		if (msg->hdr.is_lg_msg) {
-			KMSG_PRINTK("message is a large message!\n");
-			work_done += process_large_message(msg);
-		} else {
-			KMSG_PRINTK("message is a small message!\n");
-			work_done += process_small_message(msg);
+		if (ret == 0) { // success
+			/* Special processing for large messages */
+			if (msg->hdr.is_lg_msg) {
+				KMSG_PRINTK("message is a large message!\n");
+				work_done += process_large_message(msg);
+			} else {
+				KMSG_PRINTK("message is a small message!\n");
+				work_done += process_small_message(msg);
+			}
+			pcn_barrier();
+			msg->ready = 0;
 		}
-		pcn_barrier();
-		msg->ready = 0;
+		else if (ret == -2) { // timout expired
+			KMSG_PRINTK("retry (timout expired %lu ticks)\n", timeout);
+			continue; //don't increment
+		}
+		else if (ret == -3) {// message not ready yet
+			KMSG_PRINTK("continue to the next message (message not ready in timeout %lu %lu)\n", FORCED_TIMEOUT, timeout);
+		}
+		else {// unexpected state
+			printk(KERN_ALERT"%s: win_get_common returned %ld unknown value ABORTING OPERATIO FORCEDN.\n",
+				__func__, (long)ret);
+			win_enable_int(win);
+			return work_done;
+		}
+
 		//win_advance_tail(win);
 		fetch_and_add(&win->tail, 1);
 	}

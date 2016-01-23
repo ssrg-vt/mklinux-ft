@@ -129,16 +129,18 @@ int win_put_timed(struct pcn_kmsg_window *win,
 // 3.b round-robin
 // 4. multiple channels - high prio, low prio
 
-
-//static inline 
-int win_get(struct pcn_kmsg_window *win,
-			  struct pcn_kmsg_reverse_message **msg)
+static inline
+int __win_get(struct pcn_kmsg_window *win,
+			struct pcn_kmsg_reverse_message **msg,
+			int force,
+			unsigned long* timeout)
 {
 	struct pcn_kmsg_reverse_message *rcvd;
-    unsigned long long sleep_start;
+	unsigned long long sleep_start;
+	unsigned long sleep_timeout = (timeout ? *timeout : 0);
+	int ready =1;
 
 	if (!win_inuse(win)) {
-
 		KMSG_PRINTK("nothing in buffer, returning...\n");
 		return -1;
 	}
@@ -149,31 +151,64 @@ int win_get(struct pcn_kmsg_window *win,
 	/* spin until entry.ready at end of cache line is set */
 	rcvd =(struct pcn_kmsg_reverse_message*) &(win->buffer[win->tail % PCN_KMSG_RBUF_SIZE]);
 	//KMSG_PRINTK("%s: Ready bit: %u\n", __func__, rcvd->hdr.ready);
-
     sleep_start = native_read_tsc();
 	while (!rcvd->ready) {
-
 		//pcn_cpu_relax();
 		//msleep(1);
 
+		if ((unsigned long)(native_read_tsc() - sleep_start) > sleep_timeout) {
+			ready =0;
+			if (force)
+				break;     // continue handling the message even if it is an error
+			else
+				return -2; //TODO timeout error, set the right error code
+		}
 	}
     total_sleep_win_get += native_read_tsc() - sleep_start;
     sleep_win_get_count++;
+if (timeout)
+	*timeout -= (unsigned long) total_sleep_win_get;
 
 	// barrier here?
 	pcn_barrier();
 
+if (force && !ready)
+	if (rcvd->ready)
+		ready=1;
+	
 	//log_receive[log_r_index%LOGLEN]=rcvd->hdr;
 	memcpy(&(log_receive[log_r_index%LOGLEN]),&(rcvd->hdr),sizeof(struct pcn_kmsg_hdr));
 	log_r_index++;
-
 	//rcvd->hdr.ready = 0;
-
+if (ready) {
 	*msg = rcvd;
 msg_get++;
-
 	return 0;
 }
+else
+	return -3;
+}
+
+//TODO migrate this in the header file as static inline and convert the main function as exported function
+//static inline 
+int win_get(struct pcn_kmsg_window *win,
+                          struct pcn_kmsg_reverse_message **msg)
+{
+  return __win_get(win, msg, 0, 0);
+}
+int win_get_forced(struct pcn_kmsg_window *win,
+                          struct pcn_kmsg_reverse_message **msg)
+{
+  return __win_get(win, msg, 1, 0);
+}
+int win_get_common(struct pcn_kmsg_window *win,
+                        struct pcn_kmsg_reverse_message **msg,
+			int force,
+			unsigned long * timeout)
+{
+  return __win_get(win, msg, force, timeout);
+}
+
 
 int win_init (void)
 {
