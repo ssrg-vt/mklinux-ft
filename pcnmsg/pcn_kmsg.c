@@ -450,12 +450,15 @@ void keepalive_timer (unsigned long arg)
 /*****************************************************************************/
 /* General interface and Internal dispatching */
 /*****************************************************************************/
-
+volatile static int force_flush =0;
+volatile static int force_waiters =0;
 int max_msg_put = 0;
 static int pcn_read_proc(char *page, char **start, off_t off, int count, int *eof, void *data)
 {
 	char *p= page;
     int len, i, idx;
+
+    p += sprintf(p, "force_flush: %d %d\n", force_flush, force_waiters);
 
     p += sprintf(p, "Sleep win_put[total,count,avg]=[%llx,%x,%llx]\n",
                     total_sleep_win_put,
@@ -1264,8 +1267,51 @@ static int process_small_message(struct pcn_kmsg_reverse_message *msg)
 	return work_done;
 }
 
+//DECLARE_PER_CPU(int, force_flush); //TODO initialize to 0
+//volatile static int force_flush=0; //NOTE declared before for statistics
+//DECLARE_PER_CPU(int, force_waiters); //TODO initialize to 0
+//volatile static int force_waiters=0; //NOTE declared before for statistics
+DECLARE_WAIT_QUEUE_HEAD(force_flush_queue);
+
+//TODO this should be converted PER_CPU we left like this because it also possible that the calling thread can migrate
+//NOTE if you don't want a timeout just pass 0 as an argument --- timeout in jiffies
+int pcn_kmsg_force_flush(unsigned long *timeout)
+{
+	struct work_struct* kmsg_work = kmalloc(sizeof(struct work_struct), GFP_ATOMIC);
+	int forced = sync_cmpxchg(&force_flush, 0, 1); //another thread on the same cpu can be already waiting
+	int ret =0;
+
+	force_waiters++; //we are keeping statistics on how many waiters there are
+	if (!kmsg_work) //check consistency before continuing
+		BUG(); //cannot allocate memory to queue work
+
+	if (!forced) { //if we are the first asking for a force action we should trigger pcn_kmsg_action->pcn_kmsg_poll_handler
+		INIT_WORK(kmsg_work,pcn_kmsg_action);
+                queue_work(messaging_wq, kmsg_work);
+	}
+
+	if (timeout) { //now waiting (all threads in synch) - with or without timeout
+		ret = wait_event_timeout(force_flush_queue, (force_flush==0),(long)*timeout);
+		if (ret) 
+			*timeout = (unsigned long) ret;
+		else
+			ret =-3; //timeout error
+	}
+	else {
+		wait_event(force_flush_queue, (force_flush==0));
+	}
+	
+	force_waiters--; //note that we are doing this even in the case of timeout error
+	if (ret ==-3) //I am not sure if this is a good idea or no
+		sync_cmpxchg(&force_flush, 1, 0);
+
+	return ret;
+}
+
 //NOTE  the following is right now in ticks
 #define FORCED_TIMEOUT 2000000l
+#define UNFORCED_TIMEOUT 8000000l
+//#define UNFORCED_TIMEOUT (~0l)
 static int pcn_kmsg_poll_handler(void)
 {
 	struct pcn_kmsg_reverse_message *msg;
@@ -1273,12 +1319,12 @@ static int pcn_kmsg_poll_handler(void)
 	int work_done = 0;
 	int forced =0; // TODO fetch this value from a configuration it should be protected or atomically changed
 	int ret =0;
-	unsigned long timeout =0;
+	unsigned long timeout =UNFORCED_TIMEOUT;
 
 	KMSG_PRINTK("called\n");
 
-	// TODO Here fetch the value of forced
-	timeout =  (forced ? FORCED_TIMEOUT : ~0); //infinite if is not forced
+	if ((forced = force_flush))
+		timeout = FORCED_TIMEOUT;
 
 pull_msg:
 	/* Get messages out of the buffer first */
@@ -1286,7 +1332,13 @@ pull_msg:
 	//while ((work_done < PCN_KMSG_BUDGET) && (!win_get(rkvirt[my_cpu], &msg))) {
 	//while ( win_get(win, &msg) ) {
 	while ( (ret = win_get_common(win, &msg, forced, &timeout)) != -1 ) {
+		int _forced = forced;
 		KMSG_PRINTK("got a message!\n");
+
+		if ((forced = force_flush)) //update operation mode (it is async with this execution)
+			timeout = FORCED_TIMEOUT;
+		else
+                        timeout = UNFORCED_TIMEOUT;
 
 		if (ret == 0) { // success
 			/* Special processing for large messages */
@@ -1301,15 +1353,19 @@ pull_msg:
 			msg->ready = 0;
 		}
 		else if (ret == -2) { // timout expired
-			KMSG_PRINTK("retry (timout expired %lu ticks)\n", timeout);
+			KMSG_PRINTK("retry (timout expired %lu ticks) %s %d\n", 
+				(_forced ? UNFORCED_TIMEOUT : FORCED_TIMEOUT),
+				(_forced != forced ? "mode switch" : "same mode"), forced);
 			continue; //don't increment
 		}
 		else if (ret == -3) {// message not ready yet
-			KMSG_PRINTK("continue to the next message (message not ready in timeout %lu %lu)\n", FORCED_TIMEOUT, timeout);
+			KMSG_PRINTK("continue to the next message (message not ready in timeout %lu %lu) %s\n",
+				 FORCED_TIMEOUT, timeout,
+				(_forced != forced ? "mode switch" : "same mode"));
 		}
 		else {// unexpected state
-			printk(KERN_ALERT"%s: win_get_common returned %ld unknown value ABORTING OPERATIO FORCEDN.\n",
-				__func__, (long)ret);
+			printk(KERN_ALERT"%s: win_get_common returned %ld unknown value ABORTING OPERATION FORCED (%d,%d).\n",
+				__func__, (long)ret, _forced, forced);
 			win_enable_int(win);
 			return work_done;
 		}
@@ -1323,7 +1379,13 @@ pull_msg:
 		win_disable_int(win);
 		goto pull_msg;
 	}
-
+/* NOTE  we moved this into pcn_kmsg_action because you want to be sure that messages were also dispatched
+	if ( wait_queue_active(&force_flush_queue) ) {
+		wake_up_all(force_flush_queue);
+		int ret = sync_cmpxchg(&force_flush, 1, 0);
+		if ( !ret )
+			printk(KERN_ALERT"%s: waken up all elements in force_flush wait queue but force_flush was %d\n", __func__, ret );
+	}*/
 	return work_done;
 }
 
@@ -1368,8 +1430,14 @@ static void pcn_kmsg_action(struct work_struct* work)
 	/* Then process normal-priority queue */
 	rc = process_message_list(&msglist_normprio);
 
-	kfree(work);
+	if ( waitqueue_active(&force_flush_queue) ) {
+                wake_up_all(&force_flush_queue);
+                int ret = sync_cmpxchg(&force_flush, 1, 0);
+                if ( !ret )
+                        printk(KERN_ALERT"%s: waken up all elements in force_flush wait queue but force_flush was %d\n", __func__, ret );
+	}
 
+	kfree(work);
 	return;
 }
 
