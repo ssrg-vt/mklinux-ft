@@ -1110,6 +1110,11 @@ static int exec_to_secondary_replica(void *data){
 	current->ft_det_state = FT_DET_INACTIVE;
 	add_task_to_ns(current->nsproxy->pop_ns, current);
 
+	if (sys_open((const char __user *) "/dev/pts/0", O_RDWR, 0) < 0)
+		printk(KERN_WARNING "Warning: unable to open an initial console.\n");
+
+	(void) sys_dup(0);
+	(void) sys_dup(0);
 
 	retval = kernel_execve(exe_pathp,
                                (const char *const *)copy_argv,

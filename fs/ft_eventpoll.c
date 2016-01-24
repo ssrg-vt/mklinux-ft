@@ -37,7 +37,6 @@ int ft_ep_poll_secondary(struct epoll_event __user *events)
 	int i;
 	struct epoll_wait_info *epinfo = NULL;
 
-	printk("waiting events for syscall %d\n", current->id_syscall);
 	epinfo = (struct epoll_wait_info *) ft_wait_for_syscall_info(&current->ft_pid, current->id_syscall);
 
 	if (!epinfo) {
@@ -45,16 +44,12 @@ int ft_ep_poll_secondary(struct epoll_event __user *events)
 	}
 
 	if (epinfo->nr_events > 0) {
-		for (i = 0; i < epinfo->nr_events; i++) {
-			epinfo->events[i].data -= 3;
-		}
 		copy_to_user(events, epinfo->events, epinfo->nr_events * sizeof(struct epoll_event));
 	} else {
 		printk("OOPS %d\n", epinfo->nr_events);
 	}
 
 	ret = epinfo->nr_events;
-	printk("got %d events\n", ret);
 	kfree(epinfo);
 
 	return ret;
@@ -87,7 +82,6 @@ int ft_ep_poll_primary(struct epoll_event __user *events, int nr_events)
 	}
 	
 	if(is_there_any_secondary_replica(current->ft_popcorn)){
-		printk("sending %d events for syscall %d\n", nr_events, current->id_syscall);
 		ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) epinfo, epinfo_size);
 	}
 
