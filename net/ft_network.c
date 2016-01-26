@@ -240,7 +240,7 @@ static int after_syscall_rcv_family_primary_after_secondary(struct kiocb *iocb, 
 	char* where_to_copy;
 	int err;
 #endif
-        FTPRINTK("%s started for pid %d syscall_id %d\n", __func__, current->pid, current->id_syscall);
+        //trace_printk("%s started for pid %d syscall_id %d\n", __func__, current->pid, current->id_syscall);
 	
 	store_info= (struct rcv_fam_info_before*) current->useful;
         if(!store_info){
@@ -302,6 +302,8 @@ static int after_syscall_rcv_family_primary_after_secondary(struct kiocb *iocb, 
 	}
 
 	kfree(store_info);
+
+	//trace_printk("end\n");
 	
         return FT_SYSCALL_CONTINUE;
 }
@@ -460,14 +462,15 @@ static int before_syscall_rcv_family_primary_after_secondary(struct kiocb *iocb,
         __wsum my_csum;
         int err, ret= FT_SYSCALL_DROP;
 
-        FTPRINTK("%s started for pid %d syscall_id %d\n", __func__, current->pid, current->id_syscall);
+        //trace_printk("%s started for pid %d syscall_id %d\n", __func__, current->pid, current->id_syscall);
 	
 	 /* There migth be pending syscall_info to consume
           *
           */
         syscall_info_primary= (struct rcv_fam_info *) ft_get_pending_syscall_info(&current->ft_pid, current->id_syscall);
         if(syscall_info_primary){
-       		/* There is a pending syscall info => the primary consumed the data before sending syscall info to me.
+       		//trace_printk("stuff from pri\n");
+		/* There is a pending syscall info => the primary consumed the data before sending syscall info to me.
 		 * => the data should be compleately stored on the stable buffer
 	 	 */
 		if(syscall_info_primary->ret > 0)
@@ -569,22 +572,25 @@ out:
 			FTMPRINTK("%s copied %d bytes from stable buffer\n", __func__, data_size);
 
 			if(data_size!=size){
+				//trace_printk("only %d from stable buffer, asking %d to socket\n", data_size, size-data_size);
 				char* filter_id_printed= print_filter_id(sk->ft_filter);
 				FTPRINTK("%s WARNING got only %d bytes in stable buffer (needed %d), asking socket %s next %u\n", __func__, data_size, size,filter_id_printed,tcp_sk(sk)->rcv_nxt );
 				kfree(filter_id_printed);
 				//msg->msg_iov should be already update with the correct offset
 				//call normal tcp_recv with size= size-data_size
+				if(flags&MSG_WAITALL){
+					ret= sock->ops->recvmsg(iocb, sock, msg, size-data_size, flags);
+					if(ret!=size-data_size){
+						FTPRINTK("WARNING %s recvmsg returned %d when asked %d\n", __func__, ret, size-data_size );
+					}
 
-				ret= sock->ops->recvmsg(iocb, sock, msg, size-data_size, flags);
-				if(ret!=size-data_size){
-					FTPRINTK("WARNING %s recvmsg returned %d when asked %d\n", __func__, ret, size-data_size );
+					
+					if(ret>0)
+						data_size+= ret;
+					else
+						data_size= ret;
+
 				}
-
-				
-				if(ret>0)
-					data_size+= ret;
-				else
-					data_size= ret;
 				
 			}
 	
@@ -683,7 +689,7 @@ static int before_syscall_rcv_family_secondary(struct kiocb *iocb, struct socket
 
         syscall_info_primary= (struct rcv_fam_info *) ft_wait_for_syscall_info(&current->ft_pid, current->id_syscall);
         if(!syscall_info_primary){
-                FTMPRINTK("%s switching to primary after secondary for pid %d\n", __func__, current->pid);
+                //trace_printk("%s switching to primary after secondary for pid %d\n", __func__, current->pid);
 
 		/* I am the new primary replica*/
 

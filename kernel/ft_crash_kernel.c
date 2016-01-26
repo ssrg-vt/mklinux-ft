@@ -60,8 +60,6 @@ void process_crash_kernel_notification(struct work_struct *work){
 	unsigned long long time[7];
 	unsigned long long start_up,start_addr;
 	
-	printk("%s called\n", __func__);
-
 	//0=> func total time 
 	time[0]= cpu_clock(_cpu);
 
@@ -110,19 +108,19 @@ void process_crash_kernel_notification(struct work_struct *work){
                 return;
 	}	
 
-	//printk("filters flushed\n");
+	//trace_printk("filters flushed\n");
 	
 	if(trim_stable_buffer_in_filters()){
 		printk("ERROR: %s impossible to trim filters\n", __func__);
                 return;
 	}	
-	//printk("stable buffer trimmed\n");
+	//trace_printk("stable buffer trimmed\n");
 
 	if(flush_send_buffer_in_filters()){
                 printk("ERROR: %s impossible to flush send buffers\n", __func__);
                 return;
         }
-        //printk("send buffer flushed\n");
+        //trace_printk("send buffer flushed\n");
 	
 	//set the net device up
 	//the idea is to emulate what ifconfig does
@@ -159,7 +157,7 @@ void process_crash_kernel_notification(struct work_struct *work){
         memcpy(ifr.ifr_name, "eth1", sizeof("eth1"));
         ifr.ifr_addr.sa_family= (sa_family_t) AF_INET;
 
-        ifr.ifr_flags= IFF_UP|IFF_BROADCAST|IFF_RUNNING|IFF_MULTICAST;
+        ifr.ifr_flags= IFF_UP|IFF_BROADCAST|IFF_RUNNING;
 
         sock->ops->ioctl(sock,  SIOCSIFFLAGS, (long unsigned int)&ifr);
 
@@ -176,7 +174,7 @@ void process_crash_kernel_notification(struct work_struct *work){
 	//the first unsigned short of sa_data is supposed to be the port
 	offset= sizeof(unsigned short);
 	addr= (unsigned int*) (ifr.ifr_addr.sa_data+offset);
-	*addr= inet_addr("10.1.1.47");
+	*addr= inet_addr("10.1.1.48");
 
 	sock->ops->ioctl(sock, SIOCSIFADDR, (long unsigned int)&ifr);	
 
@@ -187,7 +185,7 @@ void process_crash_kernel_notification(struct work_struct *work){
 	//printk("network up\n");
 
 	update_replica_type_after_failure();
-	//printk("replica type updated\n");
+	//trace_printk("replica type updated\n");
 
 	//5=> dummy driver down
         time[6]= cpu_clock(_cpu);
@@ -211,7 +209,7 @@ void process_crash_kernel_notification(struct work_struct *work){
 	//printk("dummy_driver down\n");
 
 	flush_syscall_info();
-	//printk("syscall info updated\n");
+	//trace_printk("syscall info updated\n");
 
 	time[0]= cpu_clock(_cpu)- time[0];
 	
