@@ -59,72 +59,6 @@ struct release_filter_msg{
         __be32 daddr;
 };
 
-struct rx_copy_msg{
-	struct pcn_kmsg_hdr header;
-        struct ft_pid creator;
-        int filter_id;
-	int is_child;
-	__be16 dport;
-	__be32 daddr;
-        long long pckt_id;
-	long long local_tx;
-
-	ktime_t tstamp;	
-        char cb[48];
-	union {
-                __wsum          csum;
-                struct {
-                        __u16   csum_start;
-                        __u16   csum_offset;
-                };
-        };
-        __u32 priority;
-        kmemcheck_bitfield_begin(flags1);
-        __u8 local_df:1,
-             cloned:1,
-             ip_summed:2,
-             nohdr:1,
-             nfctinfo:3;
-        __u8 pkt_type:3,
-             fclone:2,
-             ipvs_property:1,
-             peeked:1,
-             nf_trace:1;
-        kmemcheck_bitfield_end(flags1);
-        __be16 protocol;
-	__u32 rxhash;
-	int skb_iif;
-#ifdef CONFIG_NET_SCHED
-        __u16 tc_index;       /* traffic control index */
-#ifdef CONFIG_NET_CLS_ACT
-        __u16 tc_verd;        /* traffic control verdict */
-#endif
-#endif
-	kmemcheck_bitfield_begin(flags2);
-#ifdef CONFIG_IPV6_NDISC_NODETYPE
-        __u8 ndisc_nodetype:2;
-#endif
-        __u8 ooo_okay:1;
-        __u8 l4_rxhash:1;
-        kmemcheck_bitfield_end(flags2);
-#ifdef CONFIG_NETWORK_SECMARK
-        __u32 secmark;
-#endif
-	union {
-                __u32           mark;
-                __u32           dropcount;
-        };
-	__u16 vlan_tci;
-	int transport_header_off;
-        int network_header_off;
-        int mac_header_off;
-
-	int headerlen;
-        int datalen;
-        int taillen;
-	//NOTE: data must be the last field;
-	char data;
-};
 
 struct tx_notify_msg{
         struct pcn_kmsg_hdr header;
@@ -4154,7 +4088,7 @@ static int create_rx_skb_copy_msg(struct net_filter_info *filter, long long pckt
 
 	headerlen = skb_headroom(skb);
 	head_data_len= headerlen + skb->len;
-	message_size= head_data_len+ sizeof(*message);
+	message_size= sizeof(*message);     /*modified by xlwu*/
 
 	message= kmalloc(message_size, GFP_ATOMIC);
 	if(!message){
@@ -4176,8 +4110,8 @@ static int create_rx_skb_copy_msg(struct net_filter_info *filter, long long pckt
 	message->taillen= skb_end_pointer(skb) - skb_tail_pointer(skb);
 	
 	//this should copy both header and data
-	if (skb_copy_bits(skb, -headerlen, &message->data, head_data_len))
-               BUG();
+//	if (skb_copy_bits(skb, -headerlen, &message->data, head_data_len))
+  //             BUG();
 
 	/* Code copied from __copy_skb_header 
 	 *
@@ -4378,9 +4312,13 @@ static void send_release_filter_message(struct net_filter_info *filter){
         if(ret)
                 return;
 
-        send_to_all_secondary_replicas(filter->ft_popcorn, (struct pcn_kmsg_long_message*) msg, msg_size);
+	send_to_all_secondary_replicas_xlwu(filter->ft_popcorn, skb, msg, msg_size);
 
         kfree(msg);
+      
+        
+ //    send_to_second_kernel(filter->ft_popcorn, data->skb, data->len);
+
 }
 
 static void update_tcp_init_param(struct net_filter_info *filter, struct tcp_init_param *tcp_param){

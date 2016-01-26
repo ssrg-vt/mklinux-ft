@@ -6,9 +6,11 @@
  * (C) Ben Shelton <beshelto@vt.edu> 2013
  */
 
+#include <linux/types.h>
 #include <linux/list.h>
 #include <linux/multikernel.h>
-#include <linux/types.h>
+#include <linux/skbuff.h>
+#include <linux/ft_replication.h>
 
 /* LOCKING / SYNCHRONIZATION */
 #define pcn_cpu_relax() __asm__ ("pause":::"memory")
@@ -16,7 +18,7 @@
 #define pcn_barrier() mb()
 
 /* BOOKKEEPING */
-
+#define XLWU
 #define POPCORN_MAX_MCAST_CHANNELS 32
 
 struct pcn_kmsg_mcast_wininfo {
@@ -166,9 +168,9 @@ struct pcn_kmsg_hdr {
 #define CACHE_LINE_SIZE 128
 //#define PCN_KMSG_PAYLOAD_SIZE 60
 #define PCN_KMSG_PAYLOAD_SIZE (CACHE_LINE_SIZE - sizeof(struct pcn_kmsg_hdr))
-
 #define MAX_CHUNKS ((1 << LG_SEQNUM_SIZE) -1)
 #define PCN_KMSG_LONG_PAYLOAD_SIZE (MAX_CHUNKS * PCN_KMSG_PAYLOAD_SIZE)
+
 
 /* The actual messages.  The expectation is that developers will create their
    own message structs with the payload replaced with their own fields, and then
@@ -178,6 +180,14 @@ struct pcn_kmsg_hdr {
 /* Struct for the actual messages.  Note that hdr and payload are flipped
    when this actually goes out, so the receiver can poll on the ready bit
    in the header. */
+
+
+/* message xlwu*/
+/*struct pcn_kmsg_message_xlwu {
+        struct pcn_kmsg_hdr hdr;
+        unsigned char payload[PCN_KMSG_PAYLOAD_SIZE];
+}__attribute__((packed)) __attribute__((aligned(CACHE_LINE_SIZE)));
+*/
 struct pcn_kmsg_message {
 	struct pcn_kmsg_hdr hdr;
 	unsigned char payload[PCN_KMSG_PAYLOAD_SIZE];
@@ -185,6 +195,10 @@ struct pcn_kmsg_message {
 /*#if (sizeof(struct pcn_kmsg_message) % CACHE_LINE_SIZE != 0)
  #error "pcn_kmsg_message is not a multiple of cacheline size"
 #endif */
+struct pcn_kmsg_reverse_message_xlwu {
+        unsigned char payload[PCN_KMSG_LONG_PAYLOAD_SIZE];
+        struct pcn_kmsg_hdr hdr;
+}__attribute__((packed));
 
 struct pcn_kmsg_reverse_message {
 	unsigned char payload[PCN_KMSG_PAYLOAD_SIZE];
@@ -253,6 +267,7 @@ struct pcn_kmsg_window {
 	volatile unsigned char int_enabled;
 	volatile struct pcn_kmsg_reverse_message buffer[PCN_KMSG_RBUF_SIZE];
 	volatile int second_buffer[PCN_KMSG_RBUF_SIZE];
+       // volatile struct pcn_kmsg_reverse_message_xlwu xlwu_buffer;
 }__attribute__((packed));
 
 /* Typedef for function pointer to callback functions */
@@ -285,6 +300,152 @@ int pcn_kmsg_send_long(unsigned int dest_cpu,
 int pcn_kmsg_send_long_timeout(unsigned int dest_cpu,
                        struct pcn_kmsg_long_message *lmsg,
                        unsigned int payload_size, long * timeout);
+struct rx_copy_msg_bk{
+        //struct pcn_kmsg_hdr header;
+        struct ft_pid creator;
+        int filter_id;
+        int is_child;
+        __be16 dport;
+        __be32 daddr;
+        long long pckt_id;
+        long long local_tx;
+
+        ktime_t tstamp;
+        char cb[48];
+        union {
+                __wsum          csum;
+                struct {
+                        __u16   csum_start;
+                        __u16   csum_offset;
+                };
+        };
+        __u32 priority;
+        kmemcheck_bitfield_begin(flags1);
+        __u8 local_df:1,
+             cloned:1,
+             ip_summed:2,
+             nohdr:1,
+             nfctinfo:3;
+        __u8 pkt_type:3,
+             fclone:2,
+             ipvs_property:1,
+             peeked:1,
+             nf_trace:1;
+        kmemcheck_bitfield_end(flags1);
+        __be16 protocol;
+        __u32 rxhash;
+        int skb_iif;
+#ifdef CONFIG_NET_SCHED
+        __u16 tc_index;       /* traffic control index */
+#ifdef CONFIG_NET_CLS_ACT
+        __u16 tc_verd;        /* traffic control verdict */
+#endif
+#endif
+        kmemcheck_bitfield_begin(flags2);
+#ifdef CONFIG_IPV6_NDISC_NODETYPE
+        __u8 ndisc_nodetype:2;
+#endif
+        __u8 ooo_okay:1;
+        __u8 l4_rxhash:1;
+        kmemcheck_bitfield_end(flags2);
+#ifdef CONFIG_NETWORK_SECMARK
+        __u32 secmark;
+#endif
+        union {
+                __u32           mark;
+                __u32           dropcount;
+        };
+        __u16 vlan_tci;
+        int transport_header_off;
+ int network_header_off;
+        int mac_header_off;
+
+        int headerlen;
+        int datalen;
+        int taillen;
+}__attribute__((packed));
+
+
+struct rx_copy_msg{
+        struct pcn_kmsg_hdr header;
+        struct ft_pid creator;
+        int filter_id;
+        int is_child;
+        __be16 dport;
+        __be32 daddr;
+        long long pckt_id;
+        long long local_tx;
+
+        ktime_t tstamp;
+        char cb[48];
+        union {
+                __wsum          csum;
+             struct {
+                        __u16   csum_start;
+                        __u16   csum_offset;
+                };
+        };
+        __u32 priority;
+        kmemcheck_bitfield_begin(flags1);
+        __u8 local_df:1,
+             cloned:1,
+             ip_summed:2,
+             nohdr:1,
+             nfctinfo:3;
+        __u8 pkt_type:3,
+             fclone:2,
+             ipvs_property:1,
+             peeked:1,
+             nf_trace:1;
+        kmemcheck_bitfield_end(flags1);
+        __be16 protocol;
+        __u32 rxhash;
+        int skb_iif;
+#ifdef CONFIG_NET_SCHED
+        __u16 tc_index;       /* traffic control index */
+#ifdef CONFIG_NET_CLS_ACT
+        __u16 tc_verd;        /* traffic control verdict */
+#endif
+#endif
+        kmemcheck_bitfield_begin(flags2);
+#ifdef CONFIG_IPV6_NDISC_NODETYPE
+        __u8 ndisc_nodetype:2;
+#endif
+        __u8 ooo_okay:1;
+        __u8 l4_rxhash:1;
+        kmemcheck_bitfield_end(flags2);
+#ifdef CONFIG_NETWORK_SECMARK
+        __u32 secmark;
+#endif
+        union {
+                __u32           mark;
+                __u32           dropcount;
+        };
+        __u16 vlan_tci;
+        int transport_header_off;
+        int network_header_off;
+        int mac_header_off;
+
+        int headerlen;
+        int datalen;
+        int taillen;
+        char pad[(PCN_KMSG_PAYLOAD_SIZE - ((sizeof(struct rx_copy_msg_bk)) % PCN_KMSG_PAYLOAD_SIZE))];
+        //char pad[(PCN_KMSG_PAYLOAD_SIZE-(sizeof(struct rx_copy_msg_bk) % PCN_KMSG_PAYLOAD_SIZE)>0)?(PCN_KMSG_PAYLOAD_SIZE-sizeof(struct rx_copy_msg_bk) % PCN_KMSG_PAYLOAD_SIZE):0];
+        //NOTE: data must be the last field;
+        char data;
+}__attribute__((packed));
+
+
+int pcn_kmsg_send_skb_xlwu(unsigned int dest_cpu,
+                       const struct sk_buff *skb,
+                       struct rx_copy_msg *message,
+                           long * timeout);
+
+
+int pcn_kmsg_send_long_xlwu(unsigned int dest_cpu,
+                       struct pcn_kmsg_long_message *msg,
+                       unsigned int payload_size);
+
 /* Free a received message (called at the end of the callback function) */
 inline void pcn_kmsg_free_msg(void *msg);
 

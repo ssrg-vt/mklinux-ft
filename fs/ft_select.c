@@ -84,9 +84,6 @@ int ft_poll_secondary(struct pollfd __user *events)
 	}
 
 	if (pinfo->nr_events > 0) {
-		for (i = 0; i < pinfo->nr_events; i++) {
-			pinfo->events[i].fd -= 3;
-		}
 		copy_to_user(events, pinfo->events, pinfo->nr_events * sizeof(struct pollfd));
 	} else {
 		printk("OOPS %d\n", pinfo->nr_events);
