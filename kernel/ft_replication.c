@@ -19,6 +19,7 @@
 #include <asm/ptrace.h>
 #include <linux/sched.h>
 #include <linux/spinlock.h>
+#include <linux/fs_struct.h>
 #include <linux/rwlock_types.h>
 
 #define FT_REPLICATION_VERBOSE 0
@@ -34,12 +35,14 @@ struct secondary_replica_request{
 	int replication_degree;
 	struct ft_pop_rep_id ft_rep_id;
 	int exe_path_size;
+	int cwd_size;
 	int argc;
 	int argv_size;
 	int envc;
 	int env_size;
 	/*data is composed by:
                 -exe_path
+                -cwd
                 -argv
                 -env
          */
@@ -305,8 +308,11 @@ static int create_secondary_replica_request_msg(struct task_struct* primary_repl
 	int env_size= 0;
 	int total_msg_size= 0;
 	struct secondary_replica_request* message;
-	char *path, *rpath, *data;
+	struct path pwd_path;
+	char *path, *cwd, *rpath, *data;
 	int max_path_size= 256;
+	int max_cwd_size= 256;
+	char *ret_cwd;
 	int ret,i,argc,envc;
 
 	if(!primary_replica_task || !primary_replica_task->mm)
@@ -334,7 +340,26 @@ path_again:
 		}
 	}
 
-	total_msg_size= sizeof(*message)+ argv_size+ env_size+ max_path_size;
+cwd_again:
+	cwd = kmalloc(sizeof(char)*max_cwd_size, GFP_KERNEL);
+	if(!cwd){
+		return -ENOMEM;
+	}
+	get_fs_pwd(current->fs, &pwd_path);
+	ret_cwd = d_path(&pwd_path, cwd, max_path_size);
+	printk("cwd %s %d\n", cwd, ret_cwd);
+	if(IS_ERR(ret_cwd)){
+		kfree(cwd);
+		if(ret_cwd == ERR_PTR(-ENAMETOOLONG)){
+			max_cwd_size= max_cwd_size*2;
+			goto cwd_again;			
+		}
+		else{
+			return PTR_ERR(ret_cwd);
+		}
+	}
+
+	total_msg_size= sizeof(*message)+ argv_size+ env_size+ max_path_size + max_cwd_size;
 
 	message= kmalloc(total_msg_size, GFP_KERNEL);
 	if(!message){
@@ -344,6 +369,7 @@ path_again:
 
 	/*message->data is composed by:
 		-exe_path
+		-cwd
 		-argv
 		-env
 	*/
@@ -354,6 +380,11 @@ path_again:
 	FTPRINTK("%s: replicating %s\n", __func__, data);
 	
 	data= data+ max_path_size;
+
+	strncpy(data, ret_cwd, max_path_size);
+	message->cwd_size = max_cwd_size;
+	data= data+ max_cwd_size;
+
 	if (copy_from_user(data, (const void __user *)primary_replica_task->mm->arg_start, argv_size)) {
         	ret= -EFAULT;
 		goto out_msg;	
@@ -402,6 +433,7 @@ out_msg:
 	kfree(message);
 out:	
 	kfree(path);
+	kfree(cwd);
 	return ret;
 
 }
@@ -951,6 +983,10 @@ int copy_replication(unsigned long flags, struct task_struct *tsk){
 			tsk->next_id_resources= 0;
 			tsk->id_syscall= 0;
 			tsk->useful= NULL;
+
+			char *my_ft_pid= print_ft_pid(&tsk->ft_pid);
+			printk("pid %d is %s\n", tsk->pid, my_ft_pid );
+			kfree(my_ft_pid);
 		}
 
 out:		read_unlock(&replica_type_lock);
@@ -1050,7 +1086,7 @@ static int exec_to_secondary_replica(void *data){
 	struct secondary_replica_request* msg = data;
         struct cred *new;
         int retval;
-	char *exe_pathp,*argvp,*envp;
+	char *exe_pathp,*cwd,*argvp,*envp;
 	char **copy_argv,**copy_env;
 	int next_is_pointer,i,nr_pointers;
 
@@ -1080,7 +1116,8 @@ static int exec_to_secondary_replica(void *data){
 	current->useful= msg;
 
 	exe_pathp= (char *) &msg->data;
-	argvp= exe_pathp+ msg->exe_path_size;
+	cwd= exe_pathp+ msg->exe_path_size;
+	argvp= cwd + msg->cwd_size;
 	envp= argvp+ msg->argv_size;
 
 	copy_argv= kmalloc((msg->argc+1)*sizeof(char*), GFP_KERNEL);
@@ -1146,6 +1183,9 @@ static int exec_to_secondary_replica(void *data){
 	current->ft_det_state = FT_DET_INACTIVE;
 	add_task_to_ns(current->nsproxy->pop_ns, current);
 
+	// Set current working directory
+	
+	sys_chdir(cwd);
 	if (sys_open((const char __user *) "/dev/pts/0", O_RDWR, 0) < 0)
 		printk(KERN_WARNING "Warning: unable to open an initial console.\n");
 
