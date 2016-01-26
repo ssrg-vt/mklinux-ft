@@ -4184,7 +4184,8 @@ static void send_skb_copy(struct net_filter_info *filter, long long pckt_id, lon
         if(ret) 
                 return;
 
-        send_to_all_secondary_replicas(filter->ft_popcorn, (struct pcn_kmsg_long_message*) msg, msg_size);
+	send_to_all_secondary_replicas_xlwu(filter->ft_popcorn, skb, msg, msg_size);
+        //send_to_all_secondary_replicas(filter->ft_popcorn, (struct pcn_kmsg_long_message*) msg, msg_size);
 
         kfree(msg);    
 }       
@@ -4312,8 +4313,9 @@ static void send_release_filter_message(struct net_filter_info *filter){
         if(ret)
                 return;
 
-	send_to_all_secondary_replicas_xlwu(filter->ft_popcorn, skb, msg, msg_size);
+//	send_to_all_secondary_replicas_xlwu(filter->ft_popcorn, skb, msg, msg_size);
 
+	send_to_all_secondary_replicas(filter->ft_popcorn, (struct pcn_kmsg_long_message*) msg, msg_size);
         kfree(msg);
       
         
