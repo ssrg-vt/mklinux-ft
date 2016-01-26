@@ -15,7 +15,7 @@
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/proc_fs.h>
-#include <linux/skbuff.h>
+
 #include <asm/system.h>
 #include <asm/apic.h>
 #include <asm/hardirq.h>
@@ -23,6 +23,7 @@
 #include <asm/bootparam.h>
 #include <asm/errno.h>
 #include <asm/atomic.h>
+
 #include <linux/delay.h>
 #include <linux/timer.h>
 
@@ -259,7 +260,7 @@ static inline int pcn_kmsg_window_init(struct pcn_kmsg_window *window)
 	}
 	memset(&window->second_buffer, 0,
 		       PCN_KMSG_RBUF_SIZE * sizeof(int));
-//memset(&window->xlwu_buffer, 0, sizeof(struct pcn_kmsg_long_message));
+
 	window->int_enabled = 1;
 	return 0;
 }
@@ -915,58 +916,6 @@ exit:
 	return rc;
 }
 
-static int __pcn_kmsg_send_timed_xlwu(unsigned int dest_cpu, struct pcn_kmsg_long_message *msg,
-                           int no_block, unsigned long * time)
-{
-        int rc= 0;
-        struct pcn_kmsg_window *dest_window;
-
-        if (unlikely(dest_cpu >= POPCORN_MAX_CPUS)) {
-                KMSG_ERR("Invalid destination CPU %d\n", dest_cpu);
-                return -1;
-        }
-        if (unlikely(!msg)) {
-        KMSG_ERR("Passed in a null pointer to msg!\n");
-        return -1;
-    }
-
-        dest_window = rkvirt[dest_cpu];
-        if (unlikely(!rkvirt[dest_cpu])) {
-                KMSG_ERR("Dest win for CPU %d not mapped!\n", dest_cpu);
-                return -1;
-        }
-
-        rc = start_send_if_possible(dest_cpu);
-        if (unlikely(rc==-1))
-                return -1;
-
-        msg->hdr.from_cpu = my_cpu;
-      //  rc = win_put_timed_xlwu(dest_window, msg, no_block, time);
-
-        if (rc) {
-                if (no_block && (rc == -EAGAIN))
-                        goto exit;
-
-                KMSG_ERR("Failed to place message in dest win!\n");
-                goto exit;
-        }
-
-// NOTIFICATION ---------------------------------------------------------------
-        /* send IPI */
-        if (win_int_enabled(dest_window)) {
-                KMSG_PRINTK("Interrupts enabled; sending IPI...\n");
-                rdtscll(int_ts);
-                apic->send_IPI_single(dest_cpu, POPCORN_KMSG_VECTOR);
-        } else {
-                KMSG_PRINTK("Interrupts not enabled; not sending IPI...\n");
-        }
-
-exit:
-        finish_send(dest_cpu);
-        return rc;
-}
-
-
 int pcn_kmsg_send(unsigned int dest_cpu, struct pcn_kmsg_message *msg)
 {
 	unsigned long bp;
@@ -1000,26 +949,50 @@ int pcn_kmsg_send_noblock(unsigned int dest_cpu, struct pcn_kmsg_message *msg)
  * RETURNS 0 on success, it can propagate errors from lower layers
  */
 static inline
-int __pcn_kmsg_send_long_xlwu(unsigned int dest_cpu,
-		       struct pcn_kmsg_long_message *msg, 
+int __pcn_kmsg_send_long(unsigned int dest_cpu,
+		       struct pcn_kmsg_long_message *lmsg, 
 		       unsigned int payload_size,
 			   long * timeout)
 {
-	int ret =0;
+	int i, ret =0;
+	int num_chunks = payload_size / PCN_KMSG_PAYLOAD_SIZE;
+	struct pcn_kmsg_message this_chunk;
 	unsigned long _time;
-   //    printk("wo shi zhong guo ren++++++++++++++++++++++++++++++++++!\n");
-       KMSG_PRINTK("Sending xlwu message to CPU %d, type %d, payload size %d bytes\n",
-		    dest_cpu, msg->hdr.type, payload_size);
-        msg->hdr.is_lg_msg = 0;
-        msg->hdr.lg_start = 0;
-        msg->hdr.lg_end = 0;
-        msg->hdr.lg_seqnum = 0;
-        msg->hdr.long_number= 0;
+
+	if (payload_size % PCN_KMSG_PAYLOAD_SIZE) {
+		num_chunks++;
+	}
+
+	 if ( num_chunks >= MAX_CHUNKS ){
+		printk(KERN_ALERT"Message too long (size:%d, chunks:%d, max:%d) can not be transferred\n",
+	                payload_size, num_chunks, MAX_CHUNKS);
+	        return -EINVAL;
+	 }
+
+	KMSG_PRINTK("Sending large message to CPU %d, type %d, payload size %d bytes, %d chunks\n", 
+		    dest_cpu, lmsg->hdr.type, payload_size, num_chunks);
 
 	if (payload_size > max_msg_put)
 		max_msg_put = payload_size;
 
-		ret= __pcn_kmsg_send_timed_xlwu(dest_cpu, msg, 0, &_time);
+	this_chunk.hdr.type = lmsg->hdr.type;
+	this_chunk.hdr.prio = lmsg->hdr.prio;
+	this_chunk.hdr.is_lg_msg = 1;
+	this_chunk.hdr.long_number= fetch_and_add(&long_id,1);
+
+	for (i = 0; i < num_chunks; i++) {
+		KMSG_PRINTK("Sending chunk %d\n", i);
+
+		this_chunk.hdr.lg_start = (i == 0) ? 1 : 0;
+		this_chunk.hdr.lg_end = (i == num_chunks - 1) ? 1 : 0;
+		this_chunk.hdr.lg_seqnum = (i == 0) ? num_chunks : i;
+
+		memcpy(&this_chunk.payload, 
+		       ((unsigned char *) &lmsg->payload) + 
+		       i * PCN_KMSG_PAYLOAD_SIZE, 
+		       PCN_KMSG_PAYLOAD_SIZE);
+
+		ret= __pcn_kmsg_send_timed(dest_cpu, &this_chunk, 0, &_time);
 		if (timeout) {
 			*timeout -= _time;
 			if (*timeout < 0) { // TODO inform the other end that the message is truncated
@@ -1029,176 +1002,16 @@ int __pcn_kmsg_send_long_xlwu(unsigned int dest_cpu,
 
 		if(ret!=0)
 			return ret;
-	
+	}
 
 	return 0;
 }
-
-
-static inline
-int __pcn_kmsg_send_long(unsigned int dest_cpu,
-                       struct pcn_kmsg_long_message *lmsg,
-                       unsigned int payload_size,
-                           long * timeout)
-{
-        int i, ret =0;
-        int num_chunks = payload_size / PCN_KMSG_PAYLOAD_SIZE;
-        struct pcn_kmsg_message this_chunk;
-        unsigned long _time;
-// printk("in pcn_kmsg_send_long++++++++++++++++++++++++++++++++++!\n");
-
-        if (payload_size % PCN_KMSG_PAYLOAD_SIZE) {
-                num_chunks++;
-        }
-
-         if ( num_chunks >= MAX_CHUNKS ){
-                printk(KERN_ALERT"Message too long (size:%d, chunks:%d, max:%d) can not be transferred\n",
-                        payload_size, num_chunks, MAX_CHUNKS);
-                return -EINVAL;
-         }
-
-        KMSG_PRINTK("Sending large message to CPU %d, type %d, payload size %d bytes, %d chunks\n",
-                    dest_cpu, lmsg->hdr.type, payload_size, num_chunks);
-
-        if (payload_size > max_msg_put)
-                max_msg_put = payload_size;
-
-        this_chunk.hdr.type = lmsg->hdr.type;
-        this_chunk.hdr.prio = lmsg->hdr.prio;
-        this_chunk.hdr.is_lg_msg = 1;
-        this_chunk.hdr.long_number= fetch_and_add(&long_id,1);
-
-        for (i = 0; i < num_chunks; i++) {
-              KMSG_PRINTK("Sending chunk %d\n", i);
-
-              this_chunk.hdr.lg_start = (i == 0) ? 1 : 0;
-              this_chunk.hdr.lg_end = (i == num_chunks - 1) ? 1 : 0;
-              this_chunk.hdr.lg_seqnum = (i == 0) ? num_chunks : i;
-
-                memcpy(&this_chunk.payload,
-                       ((unsigned char *) &lmsg->payload) +
-                       i * PCN_KMSG_PAYLOAD_SIZE,
-                       PCN_KMSG_PAYLOAD_SIZE);
-
-                ret= __pcn_kmsg_send_timed(dest_cpu, &this_chunk, 0, &_time);
-                if (timeout) {
-                        *timeout -= _time;
-                        if (*timeout < 0) { // TODO inform the other end that the message is truncated
-                                return -ETIMEDOUT;
-                        }
-                }
-
-                if(ret!=0)
-                        return ret;
-        }
-        return 0;
-}
-
-
-int pcn_kmsg_send_skb_xlwu(unsigned int dest_cpu,
-                       const struct sk_buff *skb,
-                       struct rx_copy_msg *message,
-                           long * timeout)
-{
-        int i, ret =0;
-        printk("struct rx_copy_msg %d struct pcn_kmsg_hdr %d struct rx_copy_msg_bk %d pad %d\n ", sizeof(struct rx_copy_msg), sizeof(struct pcn_kmsg_hdr), sizeof(struct rx_copy_msg_bk), sizeof(message->pad));
-        if((sizeof(struct rx_copy_msg)-1-sizeof(struct pcn_kmsg_hdr))%PCN_KMSG_PAYLOAD_SIZE != 0)
-                printk("ERROR size is %d payload is %d\n ", (sizeof(struct rx_copy_msg)-1-sizeof(struct pcn_kmsg_hdr)), PCN_KMSG_PAYLOAD_SIZE);
-
-        int num_chunks = (sizeof(struct rx_copy_msg)-1-sizeof(struct pcn_kmsg_hdr)) / PCN_KMSG_PAYLOAD_SIZE;
-        int  headerlen = skb_headroom(skb);
-
-        int num_chunks_data=(skb->len+headerlen) / PCN_KMSG_PAYLOAD_SIZE;
-       // headerlen=skb_head_headroom(skb)
-        struct pcn_kmsg_message this_chunk;
-        unsigned long _time;
-        struct pcn_kmsg_long_message *lmsg= (struct pcn_kmsg_long_message *) message;
-       // head_data_len= headerlen + skb->len;
-
-        if ( (skb->len+headerlen) % PCN_KMSG_PAYLOAD_SIZE) {
-                num_chunks_data++;
-        }
-
-
-        /* if ( num_chunks >= MAX_CHUNKS ){
-                printk(KERN_ALERT"Message too long (size:%d, chunks:%d, max:%d) can not be transferred\n",
-                        payload_size, num_chunks, MAX_CHUNKS);
-                return -EINVAL;
-         }*/
-
-    //    KMSG_PRINTK("Sending large message to CPU %d, type %d, payload size %d bytes, %d chunks\n",
-      //              dest_cpu, message->hdr.type, payload_size, num_chunks);
-
-   //     if (payload_size > max_msg_put)
-     //           max_msg_put = payload_size;
-
-        this_chunk.hdr.type= message->header.type;
-        this_chunk.hdr.prio= message->header.prio;
-        this_chunk.hdr.is_lg_msg = 1;
-        this_chunk.hdr.long_number= fetch_and_add(&long_id,1);
-        for (i = 0; i < num_chunks; i++) {
-              KMSG_PRINTK("Sending chunk %d\n", i);
-             this_chunk.hdr.lg_end= 0;
-             this_chunk.hdr.lg_start = (i == 0) ? 1 : 0;
-             this_chunk.hdr.lg_seqnum = (i == 0) ? num_chunks+num_chunks_data : i;
-
-             memcpy(&this_chunk.payload,
-                       ((unsigned char *) &lmsg->payload) +
-                       i * PCN_KMSG_PAYLOAD_SIZE,
-                       PCN_KMSG_PAYLOAD_SIZE); 
-
-             ret= __pcn_kmsg_send_timed(dest_cpu, &this_chunk, 0, &_time);
-        }
-
-        for (i = 0; i < num_chunks_data; i++) {
-              KMSG_PRINTK("Sending chunk %d\n", i);
-             this_chunk.hdr.lg_start= 0;
-             this_chunk.hdr.lg_end = (i == (num_chunks_data - 1)) ? 1 : 0;
-             this_chunk.hdr.lg_seqnum = i+num_chunks;
-
-             if (skb_copy_bits(skb, -headerlen+i*PCN_KMSG_PAYLOAD_SIZE, &this_chunk.payload, 
-                        (i == (num_chunks_data-1)) ? ((skb->len+headerlen)% PCN_KMSG_PAYLOAD_SIZE): PCN_KMSG_PAYLOAD_SIZE))
-               BUG();
-
-
-             ret= __pcn_kmsg_send_timed(dest_cpu, &this_chunk, 0, &_time);
-
-                if (timeout) {
-                        *timeout -= _time;
-                        if (*timeout < 0) { // TODO inform the other end that the message is truncated
-                                return -ETIMEDOUT;
-                        }
-                }
-
-                if(ret!=0)
-                        return ret;
-        }
-
-        return 0;
-}
-
 int pcn_kmsg_send_long(unsigned int dest_cpu,
 		       struct pcn_kmsg_long_message *lmsg,
 		       unsigned int payload_size)
 {
 	return __pcn_kmsg_send_long(dest_cpu, lmsg, payload_size, 0);
 }
-
-int pcn_kmsg_send_long_xlwu(unsigned int dest_cpu,
-                       struct pcn_kmsg_long_message *msg,
-                       unsigned int payload_size)
-{
-        return __pcn_kmsg_send_long_xlwu(dest_cpu, msg, payload_size, 0);
-}
-
-
-/*int pcn_kmsg_send_long_xlwu(unsigned int dest_cpu,
-                       const char *data,
-                       unsigned long payload_size)
-{
-        return __pcn_kmsg_send_long_xlwu(dest_cpu, data, payload_size, 0);
-}*/
-
 /*
  * RETURNs -ETIMEDOUT if timeout expires and in timeout the still available time (negative if is past the deadline)
  */
@@ -1502,8 +1315,6 @@ int pcn_kmsg_force_flush(unsigned long *timeout)
 static int pcn_kmsg_poll_handler(void)
 {
 	struct pcn_kmsg_reverse_message *msg;
-        struct pcn_kmsg_reverse_message_xlwu *msg1;
-
 	struct pcn_kmsg_window *win = rkvirt[my_cpu]; // TODO this will not work for clustering
 	int work_done = 0;
 	int forced =0; // TODO fetch this value from a configuration it should be protected or atomically changed
