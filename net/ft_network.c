@@ -203,22 +203,32 @@ static struct sock *ft_syscall_accept_primary(struct request_sock_queue *queue, 
 }
 
 struct sock *ft_syscall_accept(struct request_sock_queue *queue, struct sock *parent, int flags, int* err){
+	struct sock* ret;
 	
 	if(ft_is_replicated(current)){
 
                 if( ft_is_primary_replica(current) ){
-			return ft_syscall_accept_primary(queue, parent, err);
+			ret= ft_syscall_accept_primary(queue, parent, err);
+			return ret;
 		}
 		else{
-			if( ft_is_secondary_replica(current) )
-				return ft_syscall_accept_secondary(queue, parent, flags, err);
+			if( ft_is_secondary_replica(current) ){
+				ret= ft_syscall_accept_secondary(queue, parent, flags, err);
+				if(ret==NULL)
+	                                printk("WARNING accept secondary returned null err is %d\n", *err);
+				return ret;
+			}
 			else{
 				if(!ft_is_primary_after_secondary_replica(current)){
 					printk("ERROR: %s current (pid %d) is not primary, secondary or primary_after_secondary replica \n", __func__, current->pid);
 					return NULL;
 				}
 				else
-					return ft_syscall_accept_primary_after_secondary(queue, parent, flags, err);
+					ret= ft_syscall_accept_primary_after_secondary(queue, parent, flags, err);
+
+					if(ret==NULL)
+                                        	printk("WARNING accept primary after secondary returned null err is %d\n", *err);
+					return ret;
 			}
 		}
 
