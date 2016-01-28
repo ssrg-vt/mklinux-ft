@@ -34,6 +34,8 @@
 #define FT_PRIMARY_AFTER_SECONDARY 9
 #define FT_NEW_PRIMARY_AFTER_SECONDARY_DESCENDANT 10
 #define FT_POTENTIAL_PRIMARY_REPLICA_AFTER_SECONDARY 11
+// This one only takes effect when running deterministic system alone
+#define FT_INSIDE_NAMESPACE 12
 /****/
 
 #define WAIT_ANSWER_TIMEOUT_SECOND 5
@@ -169,6 +171,7 @@ struct net_filter_info{
 	/*those fields could be collapsed on a union...*/
 	struct sock* ft_sock;
 	struct request_sock* ft_req; //to use only if it is still a minisocket at the place of ft_sock
+	int req_added;
 	struct inet_timewait_sock* ft_time_wait; //to use only when in TCP_TIME_WAIT and struct sock is beeing substituted by a struct inet_timewait_sock	
 
 	/* NOTE creator and id compose the identifier.
@@ -203,7 +206,9 @@ struct net_filter_info{
 	 */
 	int deliver_packets;
 	int ft_primary_closed;
+	int ft_tcp_closed;
         int ft_pending_packets;
+	struct list_head pending_work;
 
 	struct stable_buffer *stable_buffer;
 	struct send_buffer *send_buffer;
@@ -264,6 +269,10 @@ int flush_send_buffer_in_filters(void);
 int send_zero_window_in_filters(void);
 int ft_ep_poll_secondary(struct epoll_event __user *events);
 int ft_ep_poll_primary(struct epoll_event __user *events, int nr_events);
+int ft_poll_secondary(struct pollfd __user *events);
+int ft_poll_primary(struct pollfd __user *events, int nr_events);
+long ft_time_secondary(time_t __user *tloc);
+long ft_time_primary(time_t __user *tloc, long ret);
 
 #define DUMMY_DRIVER "ft_dummy_driver"
 
@@ -272,6 +281,7 @@ struct tcp_request_sock;
 void print_all_filters(void);
 int create_filter(struct task_struct *task, struct sock *sk, gfp_t priority);
 void ft_listen_init(struct sock* sk);
+void ft_notify_req_added(struct net_filter_info* filter, int added);
 //int create_filter_accept(struct task_struct *task, struct socket *newsock,struct socket *sock);
 void ft_grown_mini_filter(struct sock* sk, struct request_sock *req);
 int ft_create_mini_filter(struct request_sock *req, struct sock *sk, struct sk_buff *skb);

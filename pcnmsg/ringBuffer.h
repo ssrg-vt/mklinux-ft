@@ -12,7 +12,10 @@ int win_init (void);
 
 int win_get(struct pcn_kmsg_window *win,
                           struct pcn_kmsg_reverse_message **msg);
-
+int win_get_common(struct pcn_kmsg_window *win,
+                          struct pcn_kmsg_reverse_message **msg,
+			int force,
+			unsigned long * timeout);
 
 int win_put(struct pcn_kmsg_window *win,
                           struct pcn_kmsg_message *msg,

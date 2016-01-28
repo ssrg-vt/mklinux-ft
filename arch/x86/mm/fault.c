@@ -13,7 +13,6 @@
 #include <linux/perf_event.h>		/* perf_sw_event		*/
 #include <linux/hugetlb.h>		/* hstate_index_to_shift	*/
 #include <linux/prefetch.h>		/* prefetchw			*/
-#include <linux/process_server.h> /* Multikernel */
 
 #include <asm/traps.h>			/* dotraplinkage, ...		*/
 #include <asm/pgalloc.h>		/* pgd_*(), ...			*/
@@ -1002,8 +1001,6 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
 	int write = error_code & PF_WRITE;
 	unsigned int flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE |
 					(write ? FAULT_FLAG_WRITE : 0);
-    int original_enable_do_mmap_pgoff_hook = current->enable_do_mmap_pgoff_hook;
-    int original_enable_distributed_munmap = current->enable_distributed_munmap;
 
 	tsk = current;
 	mm = tsk->mm;
@@ -1092,29 +1089,6 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
 		return;
 	}
 
-    vma = find_vma(mm, address);
-#if defined(PROCESS_SERVER_USE_DISTRIBUTED_MM_LOCK)
-    process_server_acquire_distributed_mm_lock();
-#else
-    process_server_acquire_page_lock(address);
-#endif
-	if (unlikely(!vma)) {
-        // Multikernel - see if another member of the thread group has mapped
-        // this vma
-        if(process_server_pull_remote_mappings(mm,NULL,address,flags,&vma,error_code)) {
-            goto ret;
-        }
-		if(!vma) {
-            bad_area(regs, error_code, address);
-		    goto ret;
-        }
-	} else if(process_server_pull_remote_mappings(mm,vma,address,flags,&vma,error_code)) {
-        goto ret;
-    }
-
-    current->enable_do_mmap_pgoff_hook = 0;
-    current->enable_distributed_munmap = 0;
-
 	/*
 	 * When running in the kernel we expect faults to occur only to
 	 * addresses in user space.  All other faults represent errors in
@@ -1135,7 +1109,7 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
 		if ((error_code & PF_USER) == 0 &&
 		    !search_exception_tables(regs->ip)) {
 			bad_area_nosemaphore(regs, error_code, address);
-			goto ret;
+			return;
 		}
 retry:
 		down_read(&mm->mmap_sem);
@@ -1148,11 +1122,16 @@ retry:
 		might_sleep();
 	}
 
+	vma = find_vma(mm, address);
+	if (unlikely(!vma)) {
+		bad_area(regs, error_code, address);
+		return;
+	}
 	if (likely(vma->vm_start <= address))
 		goto good_area;
 	if (unlikely(!(vma->vm_flags & VM_GROWSDOWN))) {
 		bad_area(regs, error_code, address);
-		goto ret;
+		return;
 	}
 	if (error_code & PF_USER) {
 		/*
@@ -1163,12 +1142,12 @@ retry:
 		 */
 		if (unlikely(address + 65536 + 32 * sizeof(unsigned long) < regs->sp)) {
 			bad_area(regs, error_code, address);
-			goto ret;
+			return;
 		}
 	}
 	if (unlikely(expand_stack(vma, address))) {
 		bad_area(regs, error_code, address);
-		goto ret;
+		return;
 	}
 
 	/*
@@ -1178,7 +1157,7 @@ retry:
 good_area:
 	if (unlikely(access_error(error_code, vma))) {
 		bad_area_access_error(regs, error_code, address);
-		goto ret;
+		return;
 	}
 
 	/*
@@ -1190,7 +1169,7 @@ good_area:
 
 	if (unlikely(fault & (VM_FAULT_RETRY|VM_FAULT_ERROR))) {
 		if (mm_fault_error(regs, error_code, address, fault))
-			goto ret;
+			return;
 	}
 
 	/*
@@ -1219,15 +1198,4 @@ good_area:
 	check_v8086_mode(regs, address, tsk);
 
 	up_read(&mm->mmap_sem);
-
-ret:
-    current->enable_do_mmap_pgoff_hook = original_enable_do_mmap_pgoff_hook;
-    current->enable_distributed_munmap = original_enable_distributed_munmap;
-
-#if defined(PROCESS_SERVER_USE_DISTRIBUTED_MM_LOCK)
-    process_server_release_distributed_mm_lock();
-#else
-    process_server_release_page_lock(address);
-#endif
-    return;
 }

@@ -148,3 +148,40 @@ long ft_gettimeofday(struct timeval __user * tv, struct timezone __user * tz){
         return 0;
 
 }
+
+struct time_info {
+	time_t tloc;
+	long   ret;
+};
+
+long ft_time_primary(time_t __user *tloc, long ret)
+{
+	struct time_info *timeinfo;
+
+	timeinfo = kmalloc(sizeof(struct time_info), GFP_KERNEL);
+	get_user(timeinfo->tloc, tloc);
+	timeinfo->ret = ret;
+
+	if(is_there_any_secondary_replica(current->ft_popcorn)){
+		ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, timeinfo, sizeof(struct time_info));
+	}
+
+	kfree(timeinfo);
+
+	return 0;
+
+}
+
+long ft_time_secondary(time_t __user *tloc)
+{
+	struct time_info *timeinfo;
+	long ret;
+
+	FTPRINTK("waiting time for syscall %d\n", current->id_syscall);
+	timeinfo = (struct time_info *) ft_wait_for_syscall_info(&current->ft_pid, current->id_syscall);
+	ret = timeinfo->ret;
+	put_user(timeinfo->tloc, tloc);
+	kfree(timeinfo);
+
+	return ret;
+}

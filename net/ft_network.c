@@ -28,7 +28,7 @@
 #define FTMPRINTK(...) ;
 #endif
 
-#define ENABLE_CHECKSUM 0
+#define ENABLE_CHECKSUM 1
 
 struct send_fam_info{
 	int size;
@@ -203,22 +203,32 @@ static struct sock *ft_syscall_accept_primary(struct request_sock_queue *queue, 
 }
 
 struct sock *ft_syscall_accept(struct request_sock_queue *queue, struct sock *parent, int flags, int* err){
+	struct sock* ret;
 	
 	if(ft_is_replicated(current)){
 
                 if( ft_is_primary_replica(current) ){
-			return ft_syscall_accept_primary(queue, parent, err);
+			ret= ft_syscall_accept_primary(queue, parent, err);
+			return ret;
 		}
 		else{
-			if( ft_is_secondary_replica(current) )
-				return ft_syscall_accept_secondary(queue, parent, flags, err);
+			if( ft_is_secondary_replica(current) ){
+				ret= ft_syscall_accept_secondary(queue, parent, flags, err);
+				if(ret==NULL)
+	                                printk("WARNING accept secondary returned null err is %d\n", *err);
+				return ret;
+			}
 			else{
 				if(!ft_is_primary_after_secondary_replica(current)){
 					printk("ERROR: %s current (pid %d) is not primary, secondary or primary_after_secondary replica \n", __func__, current->pid);
 					return NULL;
 				}
 				else
-					return ft_syscall_accept_primary_after_secondary(queue, parent, flags, err);
+					ret= ft_syscall_accept_primary_after_secondary(queue, parent, flags, err);
+
+					if(ret==NULL)
+                                        	printk("WARNING accept primary after secondary returned null err is %d\n", *err);
+					return ret;
 			}
 		}
 
@@ -240,7 +250,7 @@ static int after_syscall_rcv_family_primary_after_secondary(struct kiocb *iocb, 
 	char* where_to_copy;
 	int err;
 #endif
-        FTPRINTK("%s started for pid %d syscall_id %d\n", __func__, current->pid, current->id_syscall);
+        //trace_printk("%s started for pid %d syscall_id %d\n", __func__, current->pid, current->id_syscall);
 	
 	store_info= (struct rcv_fam_info_before*) current->useful;
         if(!store_info){
@@ -293,7 +303,7 @@ static int after_syscall_rcv_family_primary_after_secondary(struct kiocb *iocb, 
 		 * In here the lock already have been released, but the data was copied while holding it.
 		 * In secondary replicas, if retriving data from the stable buffer, the same order of access to the stable buffer must be ensured.
 		 */
-		FTPRINTK("%s pid %d syscall_id %d sending size %d flags %d csum %d ret %d \n", __func__, current->pid, current->id_syscall, syscall_info->size, syscall_info->flags, syscall_info->csum, syscall_info->ret);
+		printk("%s pid %d syscall_id %d sending size %d flags %d csum %d ret %d \n", __func__, current->pid, current->id_syscall, syscall_info->size, syscall_info->flags, syscall_info->csum, syscall_info->ret);
 		ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) syscall_info, sizeof(*syscall_info)+ data_size);
 #if ENABLE_CHECKSUM
 	out:
@@ -302,6 +312,8 @@ static int after_syscall_rcv_family_primary_after_secondary(struct kiocb *iocb, 
 	}
 
 	kfree(store_info);
+
+	//trace_printk("end\n");
 	
         return FT_SYSCALL_CONTINUE;
 }
@@ -460,14 +472,15 @@ static int before_syscall_rcv_family_primary_after_secondary(struct kiocb *iocb,
         __wsum my_csum;
         int err, ret= FT_SYSCALL_DROP;
 
-        FTPRINTK("%s started for pid %d syscall_id %d\n", __func__, current->pid, current->id_syscall);
+        //trace_printk("%s started for pid %d syscall_id %d\n", __func__, current->pid, current->id_syscall);
 	
 	 /* There migth be pending syscall_info to consume
           *
           */
         syscall_info_primary= (struct rcv_fam_info *) ft_get_pending_syscall_info(&current->ft_pid, current->id_syscall);
         if(syscall_info_primary){
-       		/* There is a pending syscall info => the primary consumed the data before sending syscall info to me.
+       		//trace_printk("stuff from pri\n");
+		/* There is a pending syscall info => the primary consumed the data before sending syscall info to me.
 		 * => the data should be compleately stored on the stable buffer
 	 	 */
 		if(syscall_info_primary->ret > 0)
@@ -569,22 +582,25 @@ out:
 			FTMPRINTK("%s copied %d bytes from stable buffer\n", __func__, data_size);
 
 			if(data_size!=size){
+				//trace_printk("only %d from stable buffer, asking %d to socket\n", data_size, size-data_size);
 				char* filter_id_printed= print_filter_id(sk->ft_filter);
 				FTPRINTK("%s WARNING got only %d bytes in stable buffer (needed %d), asking socket %s next %u\n", __func__, data_size, size,filter_id_printed,tcp_sk(sk)->rcv_nxt );
 				kfree(filter_id_printed);
 				//msg->msg_iov should be already update with the correct offset
 				//call normal tcp_recv with size= size-data_size
+				if(flags&MSG_WAITALL){
+					ret= sock->ops->recvmsg(iocb, sock, msg, size-data_size, flags);
+					if(ret!=size-data_size){
+						FTPRINTK("WARNING %s recvmsg returned %d when asked %d\n", __func__, ret, size-data_size );
+					}
 
-				ret= sock->ops->recvmsg(iocb, sock, msg, size-data_size, flags);
-				if(ret!=size-data_size){
-					FTPRINTK("WARNING %s recvmsg returned %d when asked %d\n", __func__, ret, size-data_size );
+					
+					if(ret>0)
+						data_size+= ret;
+					else
+						data_size= ret;
+
 				}
-
-				
-				if(ret>0)
-					data_size+= ret;
-				else
-					data_size= ret;
 				
 			}
 	
@@ -629,7 +645,7 @@ out:
 				 * In here the lock already have been released, but the data was copied while holding it.
 				 * In secondary replicas, if retriving data from the stable buffer, the same order of access to the stable buffer must be ensured.
 				 */
-				FTPRINTK("%s pid %d syscall_id %d sending size %d flags %d csum %d ret %d \n", __func__, current->pid, current->id_syscall, syscall_info_primary->size, syscall_info_primary->flags, syscall_info_primary->csum, syscall_info_primary->ret);
+				printk("%s pid %d syscall_id %d sending size %d flags %d csum %d ret %d \n", __func__, current->pid, current->id_syscall, syscall_info_primary->size, syscall_info_primary->flags, syscall_info_primary->csum, syscall_info_primary->ret);
 				
 				if(data_size>0)
 					ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) syscall_info_primary, sizeof(*syscall_info_primary)+ data_size);
@@ -683,7 +699,7 @@ static int before_syscall_rcv_family_secondary(struct kiocb *iocb, struct socket
 
         syscall_info_primary= (struct rcv_fam_info *) ft_wait_for_syscall_info(&current->ft_pid, current->id_syscall);
         if(!syscall_info_primary){
-                FTMPRINTK("%s switching to primary after secondary for pid %d\n", __func__, current->pid);
+                //trace_printk("%s switching to primary after secondary for pid %d\n", __func__, current->pid);
 
 		/* I am the new primary replica*/
 
@@ -789,6 +805,9 @@ static int before_syscall_rcv_family_replicated_sock(struct kiocb *iocb, struct 
                 printk("ERROR: %s current is replicated (pid %d) but sock is not\n", __func__, current->pid);
                 return -EFAULT;
         }
+
+        // Increase the syscall count
+        current->id_syscall++;
 
         if(ft_is_primary_replica(current) || (sock->sk && sock->sk->ft_filter && ft_is_filter_primary(sock->sk->ft_filter))){
                 return before_syscall_rcv_family_primary(iocb, sock, msg, size, flags, ret);
@@ -898,7 +917,7 @@ static int before_syscall_send_family_primary_after_secondary(struct kiocb *iocb
                                 goto out;
                         }
                         app[iov[i].iov_len]='\0';
-                        FTMPRINTK("%s: data %s\n",__func__,app);
+                        FTPRINTK("%s: data %s\n",__func__,app);
                         kfree(app);
                 }
 		#endif
@@ -940,7 +959,7 @@ static int before_syscall_send_family_primary_after_secondary(struct kiocb *iocb
 				goto out2;
 			}
 			app[iov[i].iov_len]='\0';
-			FTMPRINTK("%s: data %s\n",__func__,app);
+			FTPRINTK("%s: data %s\n",__func__,app);
 			kfree(app);
 		}
 
@@ -1034,7 +1053,7 @@ static int before_syscall_send_family_primary(struct kiocb *iocb, struct socket 
                         goto out;
 		}
 		app[iov[i].iov_len]='\0';
-		FTMPRINTK("%s: data %s\n",__func__,app);
+		FTPRINTK("%s: data %s\n",__func__,app);
 	        kfree(app);
         }
 
@@ -1062,6 +1081,9 @@ static int before_syscall_send_family_replicated_sock(struct kiocb *iocb, struct
 		printk("ERROR: %s current is replicated (pid %d) but sock is not\n", __func__, current->pid);
 		return -EFAULT;
 	}
+
+    // Increase the syscall count
+    current->id_syscall++;
 
 	if(ft_is_primary_replica(current) || ft_is_filter_primary(sk->ft_filter)){
                 return before_syscall_send_family_primary(iocb, sock, msg, size);
