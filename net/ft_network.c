@@ -303,7 +303,7 @@ static int after_syscall_rcv_family_primary_after_secondary(struct kiocb *iocb, 
 		 * In here the lock already have been released, but the data was copied while holding it.
 		 * In secondary replicas, if retriving data from the stable buffer, the same order of access to the stable buffer must be ensured.
 		 */
-		printk("%s pid %d syscall_id %d sending size %d flags %d csum %d ret %d \n", __func__, current->pid, current->id_syscall, syscall_info->size, syscall_info->flags, syscall_info->csum, syscall_info->ret);
+		FTPRINTK("%s pid %d syscall_id %d sending size %d flags %d csum %d ret %d \n", __func__, current->pid, current->id_syscall, syscall_info->size, syscall_info->flags, syscall_info->csum, syscall_info->ret);
 		ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) syscall_info, sizeof(*syscall_info)+ data_size);
 #if ENABLE_CHECKSUM
 	out:
@@ -645,7 +645,7 @@ out:
 				 * In here the lock already have been released, but the data was copied while holding it.
 				 * In secondary replicas, if retriving data from the stable buffer, the same order of access to the stable buffer must be ensured.
 				 */
-				printk("%s pid %d syscall_id %d sending size %d flags %d csum %d ret %d \n", __func__, current->pid, current->id_syscall, syscall_info_primary->size, syscall_info_primary->flags, syscall_info_primary->csum, syscall_info_primary->ret);
+				FTPRINTK("%s pid %d syscall_id %d sending size %d flags %d csum %d ret %d \n", __func__, current->pid, current->id_syscall, syscall_info_primary->size, syscall_info_primary->flags, syscall_info_primary->csum, syscall_info_primary->ret);
 				
 				if(data_size>0)
 					ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) syscall_info_primary, sizeof(*syscall_info_primary)+ data_size);
@@ -808,6 +808,7 @@ static int before_syscall_rcv_family_replicated_sock(struct kiocb *iocb, struct 
 
         // Increase the syscall count
         current->id_syscall++;
+	trace_printk("pid %d syscall id %d\n", current->pid, current->id_syscall);
 
         if(ft_is_primary_replica(current) || (sock->sk && sock->sk->ft_filter && ft_is_filter_primary(sock->sk->ft_filter))){
                 return before_syscall_rcv_family_primary(iocb, sock, msg, size, flags, ret);
@@ -1082,8 +1083,10 @@ static int before_syscall_send_family_replicated_sock(struct kiocb *iocb, struct
 		return -EFAULT;
 	}
 
-    // Increase the syscall count
-    current->id_syscall++;
+    	// Increase the syscall count
+    	current->id_syscall++;
+
+	//printk("pid %d syscall id %d\n", current->pid, current->id_syscall);
 
 	if(ft_is_primary_replica(current) || ft_is_filter_primary(sk->ft_filter)){
                 return before_syscall_send_family_primary(iocb, sock, msg, size);

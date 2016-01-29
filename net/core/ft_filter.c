@@ -2051,7 +2051,7 @@ int ft_create_mini_filter(struct request_sock *req, struct sock *sk, struct sk_b
 				//the listening socket is a PRIMARY_AFTER_SECONDARY=>
 				//create the mini-socket as PRIMARY, nothing can be pending
 
-                                if(!(hand_work && hand_work->completed == 1))
+                                if(!(hand_work && hand_work->completed == 1)){
 	                        	filter->type &= ~FT_FILTER_PRIMARY_AFTER_SECONDARY_REPLICA;
 					filter->type |= FT_FILTER_PRIMARY_REPLICA;
 				}
@@ -4805,7 +4805,7 @@ static unsigned int ft_hook_before_network_layer_primary(struct net_filter_info 
 #endif
 	if(is_there_any_secondary_replica(filter->ft_popcorn)){
         	//ft_start_time(&time);
-		if((ret=check_if_syn_to_drop(filter, skb))==NF_ACCEPT)
+		if((ret= check_if_syn_to_drop(filter, skb)) == NF_ACCEPT)
 			send_skb_copy(filter, pckt_id, local_tx, skb);
 		/*ret= try_send_skb_copy(filter, pckt_id, local_tx, skb, 10000);
 		if(IS_ERR_VALUE(ret)){
