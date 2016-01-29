@@ -723,6 +723,7 @@ static inline int __sock_recvmsg_nosec(struct kiocb *iocb, struct socket *sock,
 	si->flags = flags;
 
 #ifdef FT_POPCORN
+	//printk("%s called\n", __func__);
         ft_ret= ft_before_syscall_rcv_family(iocb, sock, msg, size, flags, &ret);
         if(ft_ret==FT_SYSCALL_DROP || IS_ERR_VALUE(ft_ret))
                 return ret;
