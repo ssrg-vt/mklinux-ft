@@ -1501,7 +1501,8 @@ static inline void queue_me(struct futex_q *q, struct futex_hash_bucket *hb)
 	 * Thus, all RT-threads are woken first in priority order, and
 	 * the others are woken last, in FIFO order.
 	 */
-	prio = min(current->normal_prio, MAX_RT_PRIO);
+	//prio = min(current->normal_prio, MAX_RT_PRIO);
+	prio = MAX_RT_PRIO;
 
 	plist_node_init(&q->list, prio);
 	plist_add(&q->list, &hb->chain);
@@ -2678,7 +2679,11 @@ long do_futex(u32 __user *uaddr, int op, u32 val, ktime_t *timeout,
 	case FUTEX_WAKE:
 		val3 = FUTEX_BITSET_MATCH_ANY;
 	case FUTEX_WAKE_BITSET:
-		ret = futex_wake(uaddr, flags, val, val3);
+		if (is_popcorn(current)) {
+			ret = futex_wake(uaddr, flags, 1, val3);
+		} else {
+			ret = futex_wake(uaddr, flags, val, val3);
+		}
 		break;
 	case FUTEX_REQUEUE:
 		ret = futex_requeue(uaddr, flags, uaddr2, val, val2, NULL, 0);

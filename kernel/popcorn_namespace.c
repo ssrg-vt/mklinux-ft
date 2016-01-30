@@ -230,6 +230,7 @@ long __det_start(struct task_struct *task)
 		schedule();
 	}
 	task->ft_det_state = FT_DET_ACTIVE;
+	trace_printk("has token with %d\n", task->ft_det_tick);
 #ifdef DET_PROF
 	dtime = (uint64_t) ktime_get().tv64 - dtime;
 	spin_lock(&(ns->tick_cost_lock));
@@ -282,6 +283,7 @@ long __det_end(struct task_struct *task)
 		return 0;
 	}
 
+	trace_printk("end with %d\n", task->ft_det_tick);
 #ifdef DET_PROF
 	dtime = (uint64_t) ktime_get().tv64;
 #endif
@@ -297,7 +299,7 @@ long __det_end(struct task_struct *task)
 	ns->end_cost[task->pid % 64] += dtime;
 	spin_unlock(&(ns->tick_cost_lock));
 #endif
-	return 1;
+	return ns->token->task->pid;
 }
 
 asmlinkage long sys_popcorn_det_end(void)
