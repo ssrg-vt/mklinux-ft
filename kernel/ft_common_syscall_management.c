@@ -856,6 +856,9 @@ void wait_for_wakeup(struct task_struct *task, int syscall_id)
 long syscall_hook_enter(struct pt_regs *regs)
 {
         current->current_syscall = regs->orig_ax;
+        if (current->ft_det_state == FT_DET_ACTIVE) {
+            trace_printk("calling %d\n", regs->orig_ax);
+        }
         // System call number is in orig_ax
         // Only increment the system call counter if we see one of the synchronized system calls.
         // read and write are handled in the socket layer
