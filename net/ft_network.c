@@ -808,7 +808,6 @@ static int before_syscall_rcv_family_replicated_sock(struct kiocb *iocb, struct 
 
         // Increase the syscall count
         current->id_syscall++;
-	trace_printk("pid %d syscall id %d\n", current->pid, current->id_syscall);
 
         if(ft_is_primary_replica(current) || (sock->sk && sock->sk->ft_filter && ft_is_filter_primary(sock->sk->ft_filter))){
                 return before_syscall_rcv_family_primary(iocb, sock, msg, size, flags, ret);

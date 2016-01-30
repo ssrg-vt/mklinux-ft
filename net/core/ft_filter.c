@@ -225,7 +225,8 @@ struct kmem_cache *ft_filters_entries;
 struct kmem_cache *hand_work_entries;
 struct kmem_cache *rx_copy_work_entries;
 
-#define MAX_INITIAL_SEQ_NUMBER (UINT_MAX/2)
+//#define MAX_INITIAL_SEQ_NUMBER (UINT_MAX/2)
+#define MAX_INITIAL_SEQ_NUMBER (UINT_MAX-(1024*4*5))
 
 static int get_iphdr(struct sk_buff *skb, struct iphdr** ip_header,int *iphdrlen);
 static void put_iphdr(struct sk_buff *skb, int iphdrlen);
@@ -3563,7 +3564,7 @@ again:	spin_lock_bh(&filter->lock);
 				
                                 rx_copy_wq= pckt_dispatcher_pool[PCKT_DISP_POOL_SIZE+1];
                                 INIT_WORK(work, dispatch_release_filter_msg);
-                                my_work->count++;
+                                //my_work->count++;
                                 my_work->filter= filter;
                                 queue_work(rx_copy_wq, work);
 	
@@ -4128,19 +4129,25 @@ again:  filter= find_and_get_filter(&msg->creator, msg->filter_id, msg->is_child
 
         }
         else{
+		if(msg->pckt_id==1){
 #if FT_FILTER_VERBOSE
-                ft_pid_printed= print_ft_pid(&msg->creator);
-                FTPRINTK("%s: creating fake filter ft_pid %s id %d child %i\n\n", __func__, ft_pid_printed, msg->filter_id, msg->is_child);
-                if(ft_pid_printed)
-                        kfree(ft_pid_printed);
+			ft_pid_printed= print_ft_pid(&msg->creator);
+			FTPRINTK("%s: creating fake filter ft_pid %s id %d child %i\n\n", __func__, ft_pid_printed, msg->filter_id, msg->is_child);
+			if(ft_pid_printed)
+				kfree(ft_pid_printed);
 #endif
 
-                ret= create_fake_filter(&msg->creator, msg->filter_id, msg->is_child, msg->daddr, msg->dport);
-                if(!ret){
-                        goto again;
+			ret= create_fake_filter(&msg->creator, msg->filter_id, msg->is_child, msg->daddr, msg->dport);
+			if(!ret){
+				goto again;
+			}
+			else{
+				printk("ERROR: %s impossible to create fake filter\n", __func__);
+				pcn_kmsg_free_msg(msg);
+			}
 		}
 		else{
-			printk("ERROR: %s impossible to create fake filter\n", __func__);
+			printk("ERROR: %s no filter for pckt id %d port %d\n", __func__, msg->pckt_id, ntohs(filter->tcp_param.dport));
 			pcn_kmsg_free_msg(msg);
 		}
         }
@@ -4788,6 +4795,10 @@ static unsigned int check_if_syn_to_drop(struct net_filter_info *filter, struct 
 		}
 
 	}
+
+	if(filter->ft_sock && (filter->ft_sock->sk_state==TCP_CLOSE || filter->ft_sock->sk_state==TCP_TIME_WAIT))
+		ret= NF_DROP;
+
 
 out:	__skb_push(skb, ip_hdrlen(skb));
 
