@@ -24,6 +24,7 @@
 #include <linux/netfilter_ipv4.h>
 #include <linux/workqueue.h>
 #include <linux/ft_time_breakdown.h>
+#include <linux/cpumask.h>
 
 #define FT_FILTER_VERBOSE 0 
 #define FT_FILTER_MINIMAL_VERBOSE 0
@@ -4037,7 +4038,7 @@ static int handle_rx_copy(struct pcn_kmsg_message* inc_msg){
 #if FT_FILTER_VERBOSE
 	char* ft_pid_printed;
 #endif
-	static int cpu_count= 32;
+	int cpu_count = nr_cpu_ids/2;
 
 	//u64 time;
 
@@ -4088,8 +4089,8 @@ again:  filter= find_and_get_filter(&msg->creator, msg->filter_id, msg->is_child
 			}
 			else{
 				cpu_count++;
-                                if(cpu_count==64)
-                                        cpu_count= 33;
+                                if(cpu_count==nr_cpu_ids)
+                                        cpu_count= (nr_cpu_ids/2)+1;
                                 INIT_WORK( (struct work_struct*)work, dispatch_copy_msg_for_listen);
 
 				spin_unlock_bh(&filter->lock);
