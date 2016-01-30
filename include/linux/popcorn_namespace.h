@@ -14,12 +14,12 @@
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/ft_common_syscall_management.h>
-#include <asm/atomic.h>
 
 // If AGGRESSIVE_DET is enabled, for all the blocking system calls,
 // only Futex will be skipped
 #define AGGRESSIVE_DET 1
 #define DETONLY
+#define TOKEN_RETRY 20
 
 //#define DET_PROF 1
 
@@ -73,9 +73,9 @@ static inline void dump_task_list(struct popcorn_namespace *ns)
 	list_for_each(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		if (ns->token != NULL && objPtr->task == ns->token->task)
-			printk("%d(%d)[%ld][%d]<%ld>[o] -> ", objPtr->task->pid, atomic_read(&objPtr->task->ft_det_tick), objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall);
+			printk("%d(%d)[%ld][%d]<%ld>[o] -> ", objPtr->task->pid, objPtr->task->ft_det_tick, objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall);
 		else
-			printk("%d(%d)[%ld][%d]<%ld>[x] -> ", objPtr->task->pid, atomic_read(&objPtr->task->ft_det_tick), objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall);
+			printk("%d(%d)[%ld][%d]<%ld>[x] -> ", objPtr->task->pid, objPtr->task->ft_det_tick, objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall);
 	}
 	printk("\n");
 	spin_unlock(&ns->task_list_lock);
@@ -151,7 +151,7 @@ static inline int add_task_to_ns(struct popcorn_namespace *ns, struct task_struc
 	if (new_task == NULL)
 		return -1;
 
-	atomic_set(&task->ft_det_tick, 0);
+	task->ft_det_tick = 0;
 	new_task->task = task;
 	ns->task_count++;
 	spin_lock_irqsave(&ns->task_list_lock, flags);
@@ -203,7 +203,7 @@ static inline int update_token(struct popcorn_namespace *ns)
 
 	list_for_each(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
-		tick_value = atomic_read(&objPtr->task->ft_det_tick);
+		tick_value = objPtr->task->ft_det_tick;
 		if (min_value >= tick_value) {
 			if(objPtr->task->state == TASK_RUNNING ||
 				 objPtr->task->state == TASK_WAKING ||
@@ -232,7 +232,7 @@ static inline int update_token(struct popcorn_namespace *ns)
 	ns->token = new_token;
 	if (ns->token != NULL &&
 			ns->token->task != NULL) {
-		ns->last_tick = atomic_read(&ns->token->task->ft_det_tick);
+		ns->last_tick = ns->token->task->ft_det_tick;
 		if (ns->token->task->state == TASK_INTERRUPTIBLE &&
 				ns->token->task->ft_det_state == FT_DET_WAIT_TOKEN) {
 			wake_up_process(ns->token->task);
@@ -250,7 +250,7 @@ static inline int update_tick(struct task_struct *task, long tick)
 
 	//dump_task_list(ns);
 	spin_lock_irqsave(&ns->task_list_lock, flags);
-	atomic_add(tick, &task->ft_det_tick);
+	task->ft_det_tick += tick;
 	update_token(ns);
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	return 1;
@@ -266,8 +266,8 @@ static inline void det_wake_up(struct task_struct *task)
 
 	spin_lock_irqsave(&ns->task_list_lock, flags);
 
-	if (ns->last_tick > atomic_read(&task->ft_det_tick)) {
-		atomic_set(&task->ft_det_tick, ns->last_tick);
+	if (ns->last_tick > task->ft_det_tick) {
+		task->ft_det_tick = ns->last_tick;
 		update_token(ns);
 		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	} else {
@@ -297,9 +297,9 @@ again:
 		// For debugging:
 		if (is_det_active(ns, task)) {
 			retry++;
-			spin_unlock_irqrestore(&ns->task_list_lock, flags);
 			printk("WARNING: %d task which does not have the token is in state FT_DET_ACTIVE [%d]\n", ns->token->task->pid, task->pid);
-			if (retry < 20)
+			spin_unlock_irqrestore(&ns->task_list_lock, flags);
+			if (retry < TOKEN_RETRY)
 				goto again;
 			else {
 				printk("[%d][%d] Critical token error\n", ns->token->task->pid, task->pid);

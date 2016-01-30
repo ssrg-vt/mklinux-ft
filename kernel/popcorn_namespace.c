@@ -250,15 +250,14 @@ asmlinkage long sys_popcorn_det_tick(long tick)
 	struct popcorn_namespace *ns;
 #ifdef DET_PROF
 	uint64_t dtime;
-#endif
 	ns = current->nsproxy->pop_ns;
+#endif
 
 	if(is_popcorn(current)) {
 #ifdef DET_PROF
 		dtime = (uint64_t) ktime_get().tv64;
 #endif
 		update_tick(current, tick);
-		ns = current->nsproxy->pop_ns;
 #ifdef DET_PROF
 		dtime = (uint64_t) ktime_get().tv64 - dtime;
 		spin_lock(&(ns->tick_cost_lock));
