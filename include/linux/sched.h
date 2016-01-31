@@ -1621,7 +1621,7 @@ struct task_struct {
 	
 	struct ft_pop_rep *ft_popcorn;
 	int ft_det_state;
-	atomic_t ft_det_tick;
+	uint64_t ft_det_tick;
 	long current_syscall;
 #endif
 };

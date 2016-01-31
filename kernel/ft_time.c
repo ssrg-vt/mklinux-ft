@@ -24,7 +24,7 @@ struct get_time_info{
         struct timezone tz;
 };
 
-static long ft_gettimeofday_primary(struct timeval __user * tv, struct timezone __user * tz){
+long ft_gettimeofday_primary(struct timeval __user * tv, struct timezone __user * tz){
 	long ret= 0;
 	struct get_time_info *get_time;
 
@@ -94,7 +94,7 @@ out:
 
 }
 
-static long ft_gettimeofday_secondary(struct timeval __user * tv, struct timezone __user * tz){
+long ft_gettimeofday_secondary(struct timeval __user * tv, struct timezone __user * tz){
 	long ret=0;
 	struct get_time_info *primary_info= NULL;
 	
@@ -165,6 +165,7 @@ long ft_time_primary(time_t __user *tloc, long ret)
 	if(is_there_any_secondary_replica(current->ft_popcorn)){
 		ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, timeinfo, sizeof(struct time_info));
 	}
+	FTPRINTK("sending time for syscall %d - %d - %d\n", current->id_syscall, current->pid, ret);
 
 	kfree(timeinfo);
 
@@ -177,11 +178,12 @@ long ft_time_secondary(time_t __user *tloc)
 	struct time_info *timeinfo;
 	long ret;
 
-	FTPRINTK("waiting time for syscall %d\n", current->id_syscall);
+	FTPRINTK("waiting for time %d - %d\n", current->id_syscall, current->pid);
 	timeinfo = (struct time_info *) ft_wait_for_syscall_info(&current->ft_pid, current->id_syscall);
 	ret = timeinfo->ret;
 	put_user(timeinfo->tloc, tloc);
 	kfree(timeinfo);
+	FTPRINTK("got time for syscall %d - %d - %d\n", current->id_syscall, ret, current->pid);
 
 	return ret;
 }
