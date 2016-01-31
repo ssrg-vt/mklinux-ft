@@ -324,7 +324,8 @@ static inline int is_det_active(struct popcorn_namespace *ns, struct task_struct
 	list_for_each(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		if (objPtr->task->ft_det_state == FT_DET_ACTIVE) {
-			if (task == NULL || objPtr->task != task) {
+			if ((task == NULL || objPtr->task != task) &&
+					!(objPtr->task->state == TASK_INTERRUPTIBLE && objPtr->task->current_syscall == __NR_futex)) {
 				return 1;
 			}
 		}

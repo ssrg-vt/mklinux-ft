@@ -889,7 +889,7 @@ void syscall_hook_exit(struct pt_regs *regs)
                 // Deterministically wake up, basically futex
                 // TODO: too ugly
                 if (current->ft_det_state == FT_DET_ACTIVE) {
-                    det_wake_up(current);
+                    //det_wake_up(current);
                 }
             }
         }
