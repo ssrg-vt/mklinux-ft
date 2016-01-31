@@ -15,6 +15,7 @@
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/fs.h>
+#include <linux/fdtable.h>
 #include <linux/file.h>
 #include <linux/signal.h>
 #include <linux/errno.h>
@@ -39,6 +40,7 @@
 #include <asm/mman.h>
 #include <linux/atomic.h>
 #include <linux/ft_replication.h>
+#include <linux/popcorn_namespace.h>
 
 /*
  * LOCKING:
@@ -201,6 +203,9 @@ struct eventpoll {
 
 	struct file *file;
 
+	/* FT: used to store all the ready fds */
+	struct epoll_events_info ev_fds[1024];
+
 	/* used to optimize loop detection check */
 	int visited;
 	struct list_head visited_list_link;
@@ -235,6 +240,14 @@ struct ep_send_events_data {
 	int maxevents;
 	struct epoll_event __user *events;
 };
+
+/*
+ * Structure for epoll_wait syscall info
+ */
+struct epoll_wait_info {
+	int nr_events;     // Number of events
+	struct epoll_events_info ev[0];        // Array of ready fds
+} __attribute__((packed));
 
 /*
  * Configuration options available inside /proc/sys/fs/epoll/
@@ -848,6 +861,16 @@ static struct epitem *ep_find(struct eventpoll *ep, struct file *file, int fd)
 	return epir;
 }
 
+/* Retrieve epoll_event from a fd */
+struct epoll_event *ep_find_epoll_event(struct eventpoll *ep, struct file *file, int fd)
+{
+	struct epitem *epi;
+
+	/* From fd and file structure, derive epitem */
+	epi = ep_find(ep, file, fd);
+	return &epi->event;
+}
+
 /*
  * This is the callback that is passed to the wait queue wakeup
  * mechanism. It is called by the stored file descriptors when they
@@ -1263,6 +1286,9 @@ static int ep_send_events_proc(struct eventpoll *ep, struct list_head *head,
 				list_add(&epi->rdllink, head);
 				return eventcnt ? eventcnt : -EFAULT;
 			}
+			ep->ev_fds[eventcnt].fd = epi->ffd.fd;
+			ep->ev_fds[eventcnt].events = revents;
+			//printk("%d is ready\n", epi->ffd.fd);
 			eventcnt++;
 			uevent++;
 			if (epi->event.events & EPOLLONESHOT)
@@ -1334,6 +1360,7 @@ static int ep_poll(struct eventpoll *ep, struct epoll_event __user *events,
 	long slack = 0;
 	wait_queue_t wait;
 	ktime_t expires, *to = NULL;
+	struct popcorn_namespace *ns = NULL;
 
 	if (timeout > 0) {
 		struct timespec end_time = ep_set_mstimeout(timeout);
@@ -1370,6 +1397,13 @@ fetch_events:
 			 * to TASK_INTERRUPTIBLE before doing the checks.
 			 */
 			set_current_state(TASK_INTERRUPTIBLE);
+			if (is_popcorn(current)) {
+				ns = current->nsproxy->pop_ns;
+				smp_mb();
+				spin_lock(&ns->task_list_lock);
+				update_token(ns);
+				spin_unlock(&ns->task_list_lock);
+			}
 			if (ep_events_available(ep) || timed_out)
 				break;
 			if (signal_pending(current)) {
@@ -1576,8 +1610,6 @@ SYSCALL_DEFINE4(epoll_ctl, int, epfd, int, op, int, fd,
 	    copy_from_user(&epds, event, sizeof(struct epoll_event)))
 		goto error_return;
 
-	printk("Adding fd %d to ep %d\n", fd, epfd);
-
 	/* Get the "struct file *" for the eventpoll file */
 	error = -EBADF;
 	file = fget(epfd);
@@ -1646,6 +1678,7 @@ SYSCALL_DEFINE4(epoll_ctl, int, epfd, int, op, int, fd,
 	error = -EINVAL;
 	switch (op) {
 	case EPOLL_CTL_ADD:
+		//printk("Adding fd %d to %d (%d)\n", fd, epfd, current->pid);
 		if (!epi) {
 			epds.events |= POLLERR | POLLHUP;
 			error = ep_insert(ep, &epds, tfile, fd);
@@ -1681,6 +1714,94 @@ error_return:
 	return error;
 }
 
+int ft_ep_poll_primary(struct eventpoll *ep, struct epoll_event __user *events, int nr_events);
+int ft_ep_poll_secondary(struct eventpoll *ep, struct epoll_event __user *events);
+/*
+ * Wait for the epoll info from the other side
+ */
+int ft_ep_poll_secondary(struct eventpoll *ep, struct epoll_event __user *events)
+{
+	int ret=-EFAULT;
+	int i;
+	struct epoll_wait_info *epinfo = NULL;
+	struct file *ff;
+	struct epoll_event *ev;
+
+	//printk("%d waiting for epoll\n", current->pid);
+	epinfo = (struct epoll_wait_info *) ft_wait_for_syscall_info(&current->ft_pid, current->id_syscall);
+
+	if (!epinfo) {
+		return -EFAULT;
+	}
+
+	if (epinfo->nr_events > 0) {
+		//copy_to_user(events, epinfo->events, epinfo->nr_events * sizeof(struct epoll_event));
+
+		for (i = 0; i < epinfo->nr_events; i++) {
+			/* From the fd, derive the file structure */
+			spin_lock(&current->files->file_lock);
+			ff = fcheck_files(current->files, epinfo->ev[i].fd);
+			spin_unlock(&current->files->file_lock);
+
+			/* From fd and file structure, derive epoll_event */
+			ev = ep_find_epoll_event(ep, ff, epinfo->ev[i].fd);
+			//printk("got fd %d\n", epinfo->ev[i].fd);
+			if (ev == NULL) {
+				printk("OMG llllllllllll%d\n", epinfo->ev[i].fd);
+				goto out;
+			}
+			/* Override the events field with the thing on the other side */
+			ev->events = epinfo->ev[i].events;
+			copy_to_user(events, ev, sizeof(struct epoll_event));
+			events++;
+		}
+	} else {
+		//printk("OOPS %d\n", epinfo->nr_events);
+	}
+
+	ret = epinfo->nr_events;
+
+out:
+	kfree(epinfo);
+
+	return ret;
+}
+
+/*
+ * Send the epoll info to the other side
+ */
+int ft_ep_poll_primary(struct eventpoll *ep, struct epoll_event __user *events, int nr_events)
+{
+	struct epoll_wait_info *epinfo = NULL;
+	ssize_t epinfo_size;
+	int i;
+
+	if (nr_events > 0) {
+		epinfo_size = sizeof(struct epoll_wait_info) + nr_events * sizeof(struct epoll_events_info);
+	} else {
+		epinfo_size = sizeof(struct epoll_wait_info);
+	}
+	epinfo = (struct epoll_wait_info *) kmalloc(epinfo_size, GFP_KERNEL);
+
+	if (!epinfo) {
+		printk("epinfo allocation failed!\n");
+		return -ENOMEM;
+	}
+
+	epinfo->nr_events = nr_events;
+
+	if (nr_events > 0) {
+		memcpy((void *)epinfo->ev, (void *)ep->ev_fds, nr_events * sizeof(struct epoll_events_info));
+	}
+
+	if(is_there_any_secondary_replica(current->ft_popcorn)){
+		ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) epinfo, epinfo_size);
+	}
+
+	kfree(epinfo);
+
+	return 0;
+}
 /*
  * Implement the event wait interface for the eventpoll file. It is the kernel
  * part of the user space epoll_wait(2).
@@ -1693,13 +1814,6 @@ SYSCALL_DEFINE4(epoll_wait, int, epfd, struct epoll_event __user *, events,
 	struct eventpoll *ep;
 
 #ifdef FT_POPCORN
-	/* Retrive epoll info from primary */
-	if(ft_is_replicated(current) &&
-		ft_is_secondary_replica(current)) {
-		printk("waiting on epfd %d\n", epfd);
-		return ft_ep_poll_secondary(events);
-	}
-
 	/* For primary we disable the timeout */
 	if(ft_is_replicated(current) &&
 		ft_is_primary_replica(current)) {
@@ -1737,21 +1851,29 @@ SYSCALL_DEFINE4(epoll_wait, int, epfd, struct epoll_event __user *, events,
 	 */
 	ep = file->private_data;
 
-	/* Time to fish for events ... */
-	error = ep_poll(ep, events, maxevents, timeout);
-
 #ifdef FT_POPCORN
-	/* Send it to replica */
-	if(ft_is_replicated(current) &&
-		ft_is_primary_replica(current)) {
-		printk("sending epfd %d\n", epfd);
-		ft_ep_poll_primary(events, error);
+	/* Retrive epoll info from primary */
+	if (ft_is_replicated(current) &&
+		ft_is_secondary_replica(current)) {
+		fput(file);
+		return ft_ep_poll_secondary(ep, events);
 	}
 #endif
+
+	/* Time to fish for events ... */
+	error = ep_poll(ep, events, maxevents, timeout);
 
 error_fput:
 	fput(file);
 error_return:
+
+#ifdef FT_POPCORN
+	/* Send it to replica */
+	if (ft_is_replicated(current) &&
+		ft_is_primary_replica(current)) {
+		ft_ep_poll_primary(ep, events, error);
+	}
+#endif
 
 	return error;
 }

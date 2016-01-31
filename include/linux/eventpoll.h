@@ -49,6 +49,11 @@ struct epoll_event {
 	__u64 data;
 } EPOLL_PACKED;
 
+struct epoll_events_info {
+	int fd;
+	__u32 events;
+} __attribute__((packed));
+
 #ifdef __KERNEL__
 
 /* Forward declarations to avoid compiler errors */
