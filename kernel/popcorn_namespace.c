@@ -221,7 +221,9 @@ long __det_start(struct task_struct *task)
 #endif
 
 	for (;;) {
+		spin_lock_irqsave(&ns->task_list_lock, flags);
 		task->ft_det_state = FT_DET_WAIT_TOKEN;
+		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 		set_task_state(task, TASK_INTERRUPTIBLE);
 		if (have_token(task)) {
 			set_task_state(task, TASK_RUNNING);
@@ -229,8 +231,10 @@ long __det_start(struct task_struct *task)
 		}
 		schedule();
 	}
+	spin_lock_irqsave(&ns->task_list_lock, flags);
 	task->ft_det_state = FT_DET_ACTIVE;
-	trace_printk("has token with %d\n", task->ft_det_tick);
+	spin_unlock_irqrestore(&ns->task_list_lock, flags);
+	//trace_printk("has token with %d\n", task->ft_det_tick);
 #ifdef DET_PROF
 	dtime = (uint64_t) ktime_get().tv64 - dtime;
 	spin_lock(&(ns->tick_cost_lock));
@@ -282,7 +286,7 @@ long __det_end(struct task_struct *task)
 		return 0;
 	}
 
-	trace_printk("end with %d\n", task->ft_det_tick);
+	//trace_printk("end with %d\n", task->ft_det_tick);
 #ifdef DET_PROF
 	dtime = (uint64_t) ktime_get().tv64;
 #endif
