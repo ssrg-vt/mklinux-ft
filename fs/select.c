@@ -26,6 +26,7 @@
 #include <linux/fs.h>
 #include <linux/rcupdate.h>
 #include <linux/hrtimer.h>
+#include <linux/popcorn_namespace.h>
 #include <linux/ft_replication.h>
 
 #include <asm/uaccess.h>
@@ -234,8 +235,18 @@ int poll_schedule_timeout(struct poll_wqueues *pwq, int state,
 			  ktime_t *expires, unsigned long slack)
 {
 	int rc = -EINTR;
+	struct popcorn_namespace *ns = NULL;
 
 	set_current_state(state);
+	if (state == TASK_INTERRUPTIBLE) {
+		if (is_popcorn(current)) {
+			ns = current->nsproxy->pop_ns;
+			smp_mb();
+			spin_lock(&ns->task_list_lock);
+			update_token(ns);
+			spin_unlock(&ns->task_list_lock);
+		}
+	}
 	if (!pwq->triggered)
 		rc = schedule_hrtimeout_range(expires, slack, HRTIMER_MODE_ABS);
 	__set_current_state(TASK_RUNNING);
