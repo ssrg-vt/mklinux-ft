@@ -223,12 +223,13 @@ static inline int update_token(struct popcorn_namespace *ns)
 			}
 		}
 	}
-	if (ns->token != NULL && ns->token->task != NULL && new_token != NULL && new_token->task != NULL)
+	/*if (ns->token != NULL && ns->token->task != NULL && new_token != NULL && new_token->task != NULL)
 		trace_printk("token from %d to %d\n", ns->token->task->pid, new_token->task->pid);
 	else if ((ns->token == NULL || ns->token->task == NULL) && (new_token != NULL && new_token->task != NULL))
 		trace_printk("token from NULL to %d\n", new_token->task->pid);
 	else if ((ns->token == NULL || ns->token->task == NULL) && (new_token == NULL || new_token->task == NULL))
 		trace_printk("token from NULL to NULL\n");
+	*/
 	ns->token = new_token;
 	if (ns->token != NULL &&
 			ns->token->task != NULL) {

@@ -140,6 +140,7 @@ static void* hash_lookup(hash_table_t *hashtable, char *key){
         if(head){
                 list_for_each_entry(entry, &head->list, list){
                         if((strcmp(entry->string,key)==0)){
+				trace_printk("matching key %s %s\n", entry->string, key);
                                 obj= entry->obj;
                                 goto out;
                         }
@@ -181,6 +182,7 @@ static void* hash_add(hash_table_t *hashtable, char *key, void* obj){
         if(head){
                 list_for_each_entry(app, &head->list, list){
                         if((strcmp(app->string, key)==0)){
+				trace_printk("matching key %s %s\n", app->string, key);
                                 entry= app->obj;
                                 spin_unlock(&hashtable->spinlock);
                                 kfree(new);
@@ -227,6 +229,7 @@ static void* hash_remove(hash_table_t *hashtable, char *key){
         if(head){
                 list_for_each_entry(app, &head->list, list){
                         if((strcmp(app->string, key)==0)){
+				trace_printk("matching key %s %s\n", app->string, key);
                                 entry= app;
                                 list_del(&app->list);
                                 goto out;
@@ -541,6 +544,7 @@ void* ft_wait_for_syscall_info(struct ft_pid *secondary, int id_syscall){
         if(!key)
                 return ERR_PTR(-ENOMEM);
 
+	trace_printk("waiting on key %s\n", key);
         wait_info= kmalloc(sizeof(*wait_info), GFP_ATOMIC);
         if(!wait_info)
                 return ERR_PTR(-ENOMEM);
@@ -576,7 +580,7 @@ copy:   if(present_info->populated != 1){
                 ret= ERR_PTR(-EFAULT);
 		goto out;
         }
-
+	
 	ret= present_info->private;
 
 out:
@@ -709,6 +713,7 @@ static int handle_syscall_info_msg(struct pcn_kmsg_message* inc_msg){
         if(!key)
                 return -ENOMEM;
 
+	trace_printk("received key %s\n", key);
 	/* create a wait_syscall struct.
 	 * if nobody was already waiting for this syscall, this struct will be added
 	 * on the hash table, otherwise the private field will be copied on the wait_syscall
@@ -831,11 +836,11 @@ void wait_for_wakeup(struct task_struct *task, int syscall_id)
     struct sleeping_syscall_request *req;
 
     if (!is_popcorn(task))
-        return 0;
+        return;
 
     // Only secondary gets to wait
     if (ft_is_primary_replica(task))
-        return 0;
+        return;
 
     buf = &(task->nsproxy->pop_ns->wake_up_buffer);
     for (;;) {
@@ -857,7 +862,7 @@ long syscall_hook_enter(struct pt_regs *regs)
 {
         current->current_syscall = regs->orig_ax;
         if (current->ft_det_state == FT_DET_ACTIVE) {
-            trace_printk("calling %d\n", regs->orig_ax);
+            //trace_printk("calling %d\n", regs->orig_ax);
         }
         // System call number is in orig_ax
         // Only increment the system call counter if we see one of the synchronized system calls.
@@ -867,9 +872,9 @@ long syscall_hook_enter(struct pt_regs *regs)
                     regs->orig_ax == __NR_poll ||
                     regs->orig_ax == __NR_accept ||
                     regs->orig_ax == __NR_bind ||
-                    regs->orig_ax == __NR_listen ||
-		    regs->orig_ax == __NR_socket)) {
+                    regs->orig_ax == __NR_listen)) {
 		//note sen and recv family are counted later on
+		trace_printk("syscall %d\n", regs->orig_ax);
                 //printk("Syscall %d on %d\n", regs->orig_ax, current->pid);
                 current->id_syscall++;
         }
