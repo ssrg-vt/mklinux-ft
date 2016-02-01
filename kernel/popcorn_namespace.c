@@ -230,8 +230,8 @@ long __det_start(struct task_struct *task)
 
 	for (;;) {
 		spin_lock_irqsave(&ns->task_list_lock, flags);
-		set_task_state(task, TASK_INTERRUPTIBLE);
 		mb();
+		set_task_state(task, TASK_INTERRUPTIBLE);
 		if (have_token(task)) {
 			mb();
 			set_task_state(task, TASK_RUNNING);
