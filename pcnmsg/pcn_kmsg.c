@@ -995,7 +995,7 @@ int __pcn_kmsg_send_long(unsigned int dest_cpu,
 		ret= __pcn_kmsg_send_timed(dest_cpu, &this_chunk, 0, &_time);
 		if (timeout) {
 			*timeout -= _time;
-			if (*timeout < 0) { // TODO inform the other end that the message is truncated
+			if (*timeout < 0 && (i < (num_chunks-1))) { // TODO inform the other end that the message is truncated
 				return -ETIMEDOUT;
 			}
 		}
