@@ -138,14 +138,15 @@ static void* hash_lookup(hash_table_t *hashtable, char *key){
 
         head= hashtable->table[hashval];
         if(head){
-                list_for_each_entry(entry, &head->list, list){
-                        if((strcmp(entry->string,key)==0)){
-				trace_printk("matching key %s %s\n", entry->string, key);
-                                obj= entry->obj;
-                                goto out;
-                        }
+		if(!list_empty(&head->list)){
+			list_for_each_entry(entry, &head->list, list){
+				if((strcmp(entry->string,key)==0)){
+					obj= entry->obj;
+					goto out;
+				}
 
-                }
+			}
+		}
         }
 
 out:    spin_unlock(&hashtable->spinlock);
@@ -180,16 +181,17 @@ static void* hash_add(hash_table_t *hashtable, char *key, void* obj){
         head= hashtable->table[hashval];
 
         if(head){
-                list_for_each_entry(app, &head->list, list){
-                        if((strcmp(app->string, key)==0)){
-				trace_printk("matching key %s %s\n", app->string, key);
-                                entry= app->obj;
-                                spin_unlock(&hashtable->spinlock);
-                                kfree(new);
-                                return entry;
-                        }
+		if(!list_empty(&head->list)){
+			list_for_each_entry(app, &head->list, list){
+				if((strcmp(app->string, key)==0)){
+					entry= app->obj;
+					spin_unlock(&hashtable->spinlock);
+					kfree(new);
+					return entry;
+				}
 
-                }
+			}
+		}
         }
         else{
                 hashtable->table[hashval]= kmalloc(sizeof(list_entry_t), GFP_ATOMIC);
@@ -227,15 +229,16 @@ static void* hash_remove(hash_table_t *hashtable, char *key){
         spin_lock(&hashtable->spinlock);
         head= hashtable->table[hashval];
         if(head){
-                list_for_each_entry(app, &head->list, list){
-                        if((strcmp(app->string, key)==0)){
-				trace_printk("matching key %s %s\n", app->string, key);
-                                entry= app;
-                                list_del(&app->list);
-                                goto out;
-                        }
+		if(!list_empty(&head->list)){
+			list_for_each_entry(app, &head->list, list){
+				if((strcmp(app->string, key)==0)){
+					entry= app;
+					list_del(&app->list);
+					goto out;
+				}
 
-                }
+			}
+		}
         }
 out:
         spin_unlock(&hashtable->spinlock);
@@ -304,19 +307,19 @@ char* ft_syscall_get_key(struct ft_pop_rep_id* ft_pop_id, int level, int* id_arr
                 return NULL;
 	}
 
-        pos= snprintf(string, size,"%d%d%d", ft_pop_id->kernel, ft_pop_id->id, level);
+        pos= snprintf(string, size,"%d.%d.%d", ft_pop_id->kernel, ft_pop_id->id, level);
         if(pos>=size)
                 goto out_clean;
 
         if(level){
                 for(i=0;i<level;i++){
-                        pos= pos+ snprintf(&string[pos], size-pos, "%d", id_array[i]);
+                        pos= pos+ snprintf(&string[pos], size-pos, ".%d", id_array[i]);
                         if(pos>=size)
                                 goto out_clean;
                 }
         }
 
-        pos= snprintf(&string[pos], size-pos,"%d%c", id_syscall,'\0');
+        pos= snprintf(&string[pos], size-pos,".%d%c", id_syscall,'\0');
         if(pos>=size)
                 goto out_clean;
 
@@ -329,6 +332,62 @@ out_clean:
 
 }
 
+void ft_get_key_from_filter(struct net_filter_info *filter, const char* pre_append, char **key, int*key_size){
+	char* string;
+        const int size= 1024;
+        int pos,i;
+
+        string= kmalloc(size, GFP_ATOMIC);
+        if(!string){
+                printk("%s impossible to kmalloc\n", __func__);
+    		*key= NULL;
+	        return;
+        }
+
+	pos= snprintf(string, size, "%s", pre_append);
+	pos--;
+	if(pos>=size)
+		goto out_clean;
+
+        pos= snprintf(&string[pos], size-pos,".%d.%d.%d", filter->creator.ft_pop_id.kernel, filter->creator.ft_pop_id.id, filter->creator.level);
+        if(pos>=size)
+                goto out_clean;
+
+        if(filter->creator.level){
+                for(i=0;i<filter->creator.level;i++){
+                        pos= pos+ snprintf(&string[pos], size-pos, ".%d", filter->creator.id_array[i]);
+                        if(pos>=size)
+                                goto out_clean;
+                }
+        }
+
+        pos= snprintf(&string[pos], size-pos,".%d", filter->id);
+        if(pos>=size)
+                goto out_clean;
+
+	if(filter->type & FT_FILTER_CHILD){
+		pos= snprintf(&string[pos], size-pos,".%i.%i", ntohs(filter->tcp_param.daddr), ntohs(filter->tcp_param.dport));
+        	if(pos>=size)
+                	goto out_clean;
+
+	}
+
+	pos= snprintf(&string[pos], size-pos,"%c", '\0');
+        if(pos>=size)
+                goto out_clean;
+
+	*key= string;
+	*key_size= size;
+        return ;
+
+out_clean:
+        kfree(string);
+        printk("%s: buffer size too small\n", __func__);
+        *key= NULL;
+	return;
+
+	
+}
 /* Return a string that is the concatenation of ft_pop_id fields, level, id_array and id_syscall.
  * This uniquely identify each syscall for each ft_pid replica.
  *
@@ -343,6 +402,7 @@ static struct workqueue_struct *ft_syscall_info_wq;
 struct wait_syscall{
         struct task_struct *task;
         int populated;
+	char* extra_key;
 	void *private;
 };
 
@@ -366,17 +426,19 @@ struct syscall_msg{
         int syscall_id;
 	unsigned int syscall_info_size;
 	
+	int extra_key_size;
+
 	/*this must be the last field of the struct*/
-        char data; /*contains syscall_info*/
+        char data; /*contains syscall_info + extra_key*/
 };
 
-static int create_syscall_msg(struct ft_pop_rep_id* primary_ft_pop_id, int primary_level, int* primary_id_array, int syscall_id, char* syscall_info, unsigned int syscall_info_size, struct syscall_msg** message, int *msg_size){
+static int create_syscall_msg(struct ft_pop_rep_id* primary_ft_pop_id, int primary_level, int* primary_id_array, int syscall_id, char* syscall_info, unsigned int syscall_info_size, char* extra_key, int extra_key_size, struct syscall_msg** message, int *msg_size){
 
 	struct syscall_msg* msg;
         int size;
 	char* variable_data;
 
-        size= sizeof(*msg) + syscall_info_size;
+        size= sizeof(*msg) + syscall_info_size+ extra_key_size;
         msg= kmalloc(size, GFP_KERNEL);
         if(!msg)
                 return -ENOMEM;
@@ -392,11 +454,17 @@ static int create_syscall_msg(struct ft_pop_rep_id* primary_ft_pop_id, int prima
 
 	msg->syscall_id= syscall_id;
 	msg->syscall_info_size= syscall_info_size;
+	msg->extra_key_size= extra_key_size;
 
 	variable_data= &msg->data;
 	
 	if(syscall_info_size){
 		memcpy(variable_data, syscall_info, syscall_info_size);
+	}
+
+	variable_data= &msg->data+syscall_info_size;
+	if(extra_key_size){
+		memcpy(variable_data, extra_key, extra_key_size);
 	}
 
         *message= msg;
@@ -405,12 +473,12 @@ static int create_syscall_msg(struct ft_pop_rep_id* primary_ft_pop_id, int prima
         return 0;
 }
 
-static void send_syscall_info_to_secondary_replicas(struct ft_pop_rep *replica_group, struct ft_pop_rep_id* primary_ft_pop_id, int primary_level, int* primary_id_array, int syscall_id, char* syscall_info, unsigned int syscall_info_size){
+static void send_syscall_info_to_secondary_replicas(struct ft_pop_rep *replica_group, struct ft_pop_rep_id* primary_ft_pop_id, int primary_level, int* primary_id_array, int syscall_id, char* syscall_info, unsigned int syscall_info_size, char* extra_key, unsigned int extra_key_size){
         struct syscall_msg* msg;
         int msg_size;
         int ret;
 
-        ret= create_syscall_msg(primary_ft_pop_id, primary_level, primary_id_array, syscall_id, syscall_info, syscall_info_size, &msg, &msg_size);
+        ret= create_syscall_msg(primary_ft_pop_id, primary_level, primary_id_array, syscall_id, syscall_info, syscall_info_size, extra_key, extra_key_size, &msg, &msg_size);
         if(ret)
                 return;
 
@@ -422,7 +490,7 @@ static void send_syscall_info_to_secondary_replicas(struct ft_pop_rep *replica_g
 static void send_syscall_info_to_secondary_replicas_from_work(struct work_struct* work){
         struct send_syscall_work *my_work= (struct send_syscall_work*) work;
 
-        send_syscall_info_to_secondary_replicas(my_work->replica_group, &my_work->sender.ft_pop_id, my_work->sender.level, my_work->sender.id_array, my_work->syscall_id, my_work->private, my_work->private_data_size);
+        send_syscall_info_to_secondary_replicas(my_work->replica_group, &my_work->sender.ft_pop_id, my_work->sender.level, my_work->sender.id_array, my_work->syscall_id, my_work->private, my_work->private_data_size, NULL, 0);
 
         put_ft_pop_rep(my_work->replica_group);
 	
@@ -445,10 +513,27 @@ void ft_send_syscall_info(struct ft_pop_rep *replica_group, struct ft_pid *prima
 	
 	ft_start_time(&time);
 	
-	send_syscall_info_to_secondary_replicas(replica_group, &primary_pid->ft_pop_id, primary_pid->level, primary_pid->id_array, syscall_id, syscall_info, syscall_info_size);
+	send_syscall_info_to_secondary_replicas(replica_group, &primary_pid->ft_pop_id, primary_pid->level, primary_pid->id_array, syscall_id, syscall_info, syscall_info_size, NULL, 0);
 	
 	ft_end_time(&time);
 	ft_update_time(&time, TIME_SEND_SYCALL);
+}
+
+/* Supposed to be called by a primary replica to send syscall info to its secondary replicas.
+ * Data sent is stored in @syscall_info and it is of @syscall_info_size bytes.
+ * A copy is made so data can be free after the call.
+ * The current thread will be used to send the data.
+ * It can provide and extra key to identify this syscall.
+ */
+void ft_send_syscall_info_extra_key(struct ft_pop_rep *replica_group, struct ft_pid *primary_pid, int syscall_id, char* syscall_info, unsigned int syscall_info_size, char *extra_key, unsigned int extra_key_size){
+        u64 time;
+
+        ft_start_time(&time);
+
+        send_syscall_info_to_secondary_replicas(replica_group, &primary_pid->ft_pop_id, primary_pid->level, primary_pid->id_array, syscall_id, syscall_info, syscall_info_size, extra_key, extra_key_size);
+
+        ft_end_time(&time);
+        ft_update_time(&time, TIME_SEND_SYCALL);
 }
 
 /* As for ft_send_syscall_info, but a worker thread will be used to send the data.
@@ -460,9 +545,6 @@ void ft_send_syscall_info_from_work(struct ft_pop_rep *replica_group, struct ft_
 	u64 time;
 
         //ft_start_time(&time);
-
-
-//FTPRINTK("%s called from pid %s\n", __func__, current->pid);
 
 	work= kmalloc( sizeof(*work), GFP_KERNEL);
 	if(!work)
@@ -514,6 +596,9 @@ void* ft_get_pending_syscall_info(struct ft_pid *pri_after_sec, int id_syscall){
 
 	if(present_info){
 		ret= present_info->private;
+		if(present_info->extra_key)
+			kfree(present_info->extra_key);
+
 		kfree(present_info);
 	}
 
@@ -552,6 +637,7 @@ void* ft_wait_for_syscall_info(struct ft_pid *secondary, int id_syscall){
         wait_info->task= current;
         wait_info->populated= 0;
 	wait_info->private= NULL;
+	wait_info->extra_key= NULL;
 
         if((present_info= ((struct wait_syscall*) ft_syscall_hash_add(key, (void*) wait_info)))){
 		FTPRINTK("%s data present, no need to wait\n", __func__);
@@ -587,6 +673,8 @@ out:
 	ft_syscall_hash_remove(key);
         if(free_key)
                 kfree(key);
+	if(present_info->extra_key)
+		kfree(present_info->extra_key);
         kfree(present_info);
 	
 	//ft_end_time(&time);
@@ -595,21 +683,6 @@ out:
         return ret;
 
 
-}
-
-struct flush_pckt_work{
-        struct work_struct work;
-        atomic_t* counter;
-        struct task_struct *waiting;
-};
-
-static void notify_flush_received(struct work_struct* work){
-        struct flush_pckt_work *my_work= (struct flush_pckt_work *)work;
-
-        atomic_dec(my_work->counter);
-        wake_up_process(my_work->waiting);
-
-        kfree(my_work);
 }
 
 static int ft_wake_up_primary_after_secondary(void){
@@ -622,16 +695,18 @@ static int ft_wake_up_primary_after_secondary(void){
 	for(i=0; i<syscall_hash->size; i++){
 		head= syscall_hash->table[i];
 		if(head){
-			list_for_each_entry(app, &head->list, list){
-				if(!app->obj){
-					ret= -EFAULT;
-					printk("ERROR: %s no obj field\n", __func__);
-					goto out;
-				}
-				wait_info= (struct wait_syscall*) app->obj;
-				if(wait_info->task && ft_is_primary_after_secondary_replica(wait_info->task)){
-					wait_info->populated= 1;
-			                wake_up_process(wait_info->task);
+			if(!list_empty(&head->list)){
+				list_for_each_entry(app, &head->list, list){
+					if(!app->obj){
+						ret= -EFAULT;
+						printk("ERROR: %s no obj field\n", __func__);
+						goto out;
+					}
+					wait_info= (struct wait_syscall*) app->obj;
+					if(wait_info->task && ft_is_primary_after_secondary_replica(wait_info->task)){
+						wait_info->populated= 1;
+						wake_up_process(wait_info->task);
+					}
 				}
 			}
 		}
@@ -644,42 +719,40 @@ out:
 }
 
 static int flush_sys_wq(void){
-	struct flush_pckt_work *work;
-        atomic_t sys_wq_to_wait= ATOMIC_INIT(0);
-        int ret= 0, wake;
+	drain_workqueue(ft_syscall_info_wq);
+	return 0;
+}
 
-        work= kmalloc(sizeof(*work), GFP_ATOMIC);
-        if(!work){
-                ret= -ENOMEM;
-                return ret;
+int ft_are_syscall_extra_key_present(char * key){
+	int ret= 0, i;
+        list_entry_t *head, *app;
+        struct wait_syscall* wait_info;
+
+        spin_lock(&syscall_hash->spinlock);
+
+        for(i=0; i<syscall_hash->size; i++){
+                head= syscall_hash->table[i];
+                if(head){
+			if(!list_empty(&head->list)){
+				list_for_each_entry(app, &head->list, list){
+					if(!app->obj){
+						ret= -EFAULT;
+						printk("ERROR: %s no obj field\n", __func__);
+						goto out;
+					}
+					wait_info= (struct wait_syscall*) app->obj;
+					if(wait_info->extra_key && (strcmp(wait_info->extra_key, key)==0)){
+						ret++;
+					}
+				}
+			}
+                }
         }
 
-        INIT_WORK( (struct work_struct*)work, notify_flush_received);
-        work->counter= &sys_wq_to_wait;
-        work->waiting= current;
-        //NOTE this because it is a syngle thread wq
-        queue_work(ft_syscall_info_wq, (struct work_struct*)work);
-
-        atomic_inc(&sys_wq_to_wait);
-
-        wake= 0;
-        while(atomic_read(&sys_wq_to_wait)!=0){
-                local_irq_disable();
-                preempt_disable();
-
-                __set_current_state(TASK_INTERRUPTIBLE);
-                if(atomic_read(&sys_wq_to_wait)==0)
-                        wake= 1;
-
-                preempt_enable();
-                local_irq_enable();
-
-                if(!wake)
-                        schedule();
-
-        }
-
+out:
+        spin_unlock(&syscall_hash->spinlock);
 	return ret;
+
 }
 
 /* Flush any pending syscall info still to be consumed by worker thread
@@ -707,13 +780,12 @@ static int handle_syscall_info_msg(struct pcn_kmsg_message* inc_msg){
 
 	/* retrive variable data length field (syscall_info)*/
 	private= &msg->data;
-	//printk("%s rcv %d\n",__func__,  msg->syscall_id);
+	
 	/* retrive key for this syscall in hash_table*/
         key= ft_syscall_get_key(&msg->ft_pop_id, msg->level, msg->id_array, msg->syscall_id);
         if(!key)
                 return -ENOMEM;
 
-	trace_printk("received key %s\n", key);
 	/* create a wait_syscall struct.
 	 * if nobody was already waiting for this syscall, this struct will be added
 	 * on the hash table, otherwise the private field will be copied on the wait_syscall
@@ -734,19 +806,34 @@ static int handle_syscall_info_msg(struct pcn_kmsg_message* inc_msg){
 	else
 		wait_info->private= NULL;
 
+	if(msg->extra_key_size){
+		wait_info->extra_key= kmalloc(msg->extra_key_size, GFP_ATOMIC);
+		if(!wait_info->extra_key){
+			if(wait_info->private)
+				kfree(wait_info->private);
+                        kfree(wait_info);
+                        return -ENOMEM;
+                }
+
+		memcpy(wait_info->extra_key, private+ msg->syscall_info_size, msg->extra_key_size);
+	}
+
         wait_info->task= NULL;
         wait_info->populated= 1;
 
         if((present_info= ((struct wait_syscall*) ft_syscall_hash_add(key, (void*) wait_info)))){
-			    if (present_info->task == NULL) {
-					printk("ERROR PRESENT INFO TASK IS NULL %d\n", msg->syscall_id);
-				} else {
-                present_info->private= wait_info->private;
-				//printk("%s waking up %d\n",__func__,  msg->syscall_id);
-                present_info->populated= 1;
-                wake_up_process(present_info->task);
-				}
+		if (present_info->task == NULL) {
+			printk("ERROR PRESENT INFO TASK IS NULL %d\n", msg->syscall_id);
+		
+		} else {
+	                present_info->private= wait_info->private;
+        	        present_info->populated= 1;
+                	wake_up_process(present_info->task);
+		}
+
 		kfree(key);
+		if(wait_info->extra_key)
+			kfree(wait_info->extra_key);
 		kfree(wait_info);
         }
 

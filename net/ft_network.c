@@ -837,9 +837,11 @@ int ft_before_syscall_rcv_family(struct kiocb *iocb, struct socket *sock,
         return FT_SYSCALL_CONTINUE;
 }
 
-static int after_syscall_send_family_primary(int ret){
+static int after_syscall_send_family_primary(struct socket* sock, int ret){
 	struct send_fam_info *syscall_info;
-	
+	char *extra_key= NULL;
+	unsigned int size_extra_key;
+
 	FTPRINTK("%s started for pid %d syscall_id %d\n", __func__, current->pid, current->id_syscall);
 
 	syscall_info= (struct send_fam_info*) current->useful;
@@ -853,9 +855,16 @@ static int after_syscall_send_family_primary(int ret){
 	FTPRINTK("%s pid %d syscall_id %d sending size %d csum %d ret %d \n", __func__, current->pid, current->id_syscall, syscall_info->size, syscall_info->csum, syscall_info->ret);
 
 	if(is_there_any_secondary_replica(current->ft_popcorn)){	
-		ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) syscall_info, sizeof(*syscall_info));
-	}
 
+		ft_get_key_from_filter(sock->sk->ft_filter,"SEND", &extra_key, &size_extra_key);
+
+		ft_send_syscall_info_extra_key(current->ft_popcorn, &current->ft_pid, current->id_syscall, extra_key, (extra_key==NULL)?0:size_extra_key,  (char*) syscall_info, sizeof(*syscall_info));
+
+		if(extra_key)
+	                kfree(extra_key);
+
+	}
+	
 	kfree(syscall_info);
 	current->useful= NULL;
 	
@@ -865,7 +874,7 @@ static int after_syscall_send_family_primary(int ret){
 static int after_syscall_send_family_replicated_sock(struct socket *sock, int ret){
 
 	if(ft_is_primary_replica(current) || (sock->sk && sock->sk->ft_filter && ft_is_filter_primary(sock->sk->ft_filter)) || ft_is_primary_after_secondary_replica(current)){
-                return after_syscall_send_family_primary(ret);
+                return after_syscall_send_family_primary(sock, ret);
         }
 
         if(ft_is_secondary_replica(current)){
@@ -888,21 +897,25 @@ int ft_after_syscall_send_family(struct socket *sock, int ret){
 	return FT_SYSCALL_CONTINUE;
 }
 
+static int before_syscall_send_family_primary(struct kiocb *iocb, struct socket *sock,
+                                       struct msghdr *msg, size_t size);
 static int before_syscall_send_family_primary_after_secondary(struct kiocb *iocb, struct socket *sock,
                                        struct msghdr *msg, size_t size, int* ret){
 	struct send_fam_info *syscall_info_primary= NULL;
         struct iovec *iov;
-        int iovlen, err, i;
+        int iovlen, err;
         __wsum my_csum;
 
+	trace_printk("\n");
 	syscall_info_primary= (struct send_fam_info *) ft_get_pending_syscall_info(&current->ft_pid, current->id_syscall);
         if(syscall_info_primary){
+		trace_printk("data from primary\n");
 		if(syscall_info_primary->size != size){
 			printk("ERROR: %s for pid %d size of send (syscall id %d) not matching between primary(%d) and secondary(%d)\n", __func__, current->pid, current->id_syscall, syscall_info_primary->size, (int) size);
 			goto out;
 		}
 
-		my_csum= 0;
+		/*my_csum= 0;
 
 		#if ENABLE_CHECKSUM
 		iovlen = msg->msg_iovlen;
@@ -921,6 +934,17 @@ static int before_syscall_send_family_primary_after_secondary(struct kiocb *iocb
                         kfree(app);
                 }
 		#endif
+		*/
+
+		my_csum= 0;
+        	iovlen = msg->msg_iovlen;
+        	iov = msg->msg_iov;
+
+        	err= insert_in_send_buffer_and_csum(sock->sk->ft_filter->send_buffer, iov, iovlen, size, &my_csum);
+        	if(err){
+                	printk("ERROR %s Impossible to insert in send buffer err %d\n", __func__, err);
+                	goto out;
+        	}
 
 		if(my_csum != syscall_info_primary->csum){
 			printk("ERROR: %s for pid %d csum of send (syscall id %d) not matching between primary(%d) and secondary(%d)\n", __func__, current->pid, current->id_syscall, syscall_info_primary->csum, my_csum);
@@ -931,50 +955,18 @@ static int before_syscall_send_family_primary_after_secondary(struct kiocb *iocb
 
 		kfree(syscall_info_primary);
 
+		if(!is_send_buffer_flushed(sock->sk->ft_filter->send_buffer)){
+			if(dec_and_check_pending_send_on_send_buffer(sock->sk->ft_filter->send_buffer)){
+                        	flush_send_buffer(sock->sk->ft_filter->send_buffer, sock->sk);
+                	}
+		}
+
 		return FT_SYSCALL_DROP;
 
 	}
 	else{
 
-		syscall_info_primary= kmalloc(sizeof(*syscall_info_primary), GFP_KERNEL);
-        	if(!syscall_info_primary)
-                	return -ENOMEM;
-
-        	//calculate hash
-        	syscall_info_primary->csum= 0;
-        	
-		#if ENABLE_CHECKSUM
-		iovlen = msg->msg_iovlen;
-        	iov = msg->msg_iov;
-
-		/* The data is in user space, so I copy it in kernel and after I perform the checksum.
-		 * Is it really necessary to copy it?! NOT SURE. HOPEFULLY NOT! 
-		 */
-		for(i=0; i< iovlen; i++){
-			char* app= kmalloc(iov[i].iov_len +1, GFP_KERNEL);
-			syscall_info_primary->csum= csum_and_copy_from_user(iov[i].iov_base, (void*)app, iov[i].iov_len, syscall_info_primary->csum, &err);
-			if(err){
-				printk("ERROR: %s copy_from_user failed\n", __func__);
-				kfree(app);
-				goto out2;
-			}
-			app[iov[i].iov_len]='\0';
-			FTPRINTK("%s: data %s\n",__func__,app);
-			kfree(app);
-		}
-
-		#endif
-
-		syscall_info_primary->size= size;
-
-		if(current->useful!=NULL)
-			printk("WARNING: %s going to use current->useful of pid %d but it is not NULL\n", __func__, current->pid);
-
-		current->useful= (void*) syscall_info_primary;
-
-	out2:
-		return FT_SYSCALL_CONTINUE;
-
+		return before_syscall_send_family_primary(iocb, sock, msg, size);
 	}
 
 }
@@ -1025,9 +1017,9 @@ out:
 static int before_syscall_send_family_primary(struct kiocb *iocb, struct socket *sock,
                                        struct msghdr *msg, size_t size){
 	struct send_fam_info *syscall_info;
-	 struct iovec *iov;
+	struct iovec *iov;
         int iovlen, i, err;
-	
+
 	FTPRINTK("%s started for pid %d syscall_id %d\n", __func__, current->pid, current->id_syscall);
 
 	syscall_info= kmalloc(sizeof(*syscall_info), GFP_KERNEL);
@@ -1060,6 +1052,7 @@ static int before_syscall_send_family_primary(struct kiocb *iocb, struct socket 
 	#endif
 
 	syscall_info->size= size;
+
 		
 	if(current->useful!=NULL)
 		printk("WARNING: %s going to use current->useful of pid %d but it is not NULL\n", __func__, current->pid);
@@ -1084,8 +1077,6 @@ static int before_syscall_send_family_replicated_sock(struct kiocb *iocb, struct
 
     	// Increase the syscall count
     	current->id_syscall++;
-
-	//printk("pid %d syscall id %d\n", current->pid, current->id_syscall);
 
 	if(ft_is_primary_replica(current) || ft_is_filter_primary(sk->ft_filter)){
                 return before_syscall_send_family_primary(iocb, sock, msg, size);

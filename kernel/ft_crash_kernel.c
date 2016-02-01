@@ -184,6 +184,11 @@ void process_crash_kernel_notification(struct work_struct *work){
 	time[5]= cpu_clock(_cpu)- time[5];
 	//printk("network up\n");
 
+	/*if(flush_send_buffer_in_filters()){
+                printk("ERROR: %s impossible to flush send buffers\n", __func__);
+                return;
+        }*/
+
 	update_replica_type_after_failure();
 	//trace_printk("replica type updated\n");
 

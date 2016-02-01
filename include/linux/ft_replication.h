@@ -240,10 +240,13 @@ int copy_replication(unsigned long flags, struct task_struct *tsk);
 
 #define FT_SYSCALL_CONTINUE 0
 #define FT_SYSCALL_DROP 1
+void ft_send_syscall_info_extra_key(struct ft_pop_rep *replica_group, struct ft_pid *primary_pid, int syscall_id, char* syscall_info, unsigned int syscall_info_size, char *extra_key, unsigned int extra_key_size);
 void ft_send_syscall_info(struct ft_pop_rep *replica_group, struct ft_pid *primary_pid, int syscall_id, char* syscall_info, unsigned int syscall_info_size);
 void ft_send_syscall_info_from_work(struct ft_pop_rep *replica_group, struct ft_pid *primary_pid, int syscall_id, char* syscall_info, unsigned int syscall_info_size);
 void* ft_wait_for_syscall_info(struct ft_pid *secondary, int id_syscall);
 void* ft_get_pending_syscall_info(struct ft_pid *pri_after_sec, int id_syscall);
+void ft_get_key_from_filter(struct net_filter_info *filter, const char* pre_append, char **key, int*key_size);
+int ft_are_syscall_extra_key_present(char * key);
 int flush_syscall_info(void);
 
 struct timeval;
@@ -266,6 +269,9 @@ int insert_in_send_buffer_and_csum(struct send_buffer *send_buffer, struct iovec
 int remove_and_copy_from_stable_buffer_no_wait(struct stable_buffer *stable_buffer, struct iovec *iov, int size);
 int trim_stable_buffer_in_filters(void);
 int flush_send_buffer_in_filters(void);
+int dec_and_check_pending_send_on_send_buffer(struct send_buffer *send_buffer);
+int flush_send_buffer(struct send_buffer *send_buffer, struct sock* sock);
+int is_send_buffer_flushed(struct send_buffer *send_buffer);
 int send_zero_window_in_filters(void);
 int ft_ep_poll_secondary(struct epoll_event __user *events);
 int ft_ep_poll_primary(struct epoll_event __user *events, int nr_events);
