@@ -437,6 +437,7 @@ static int create_syscall_msg(struct ft_pop_rep_id* primary_ft_pop_id, int prima
 	struct syscall_msg* msg;
         int size;
 	char* variable_data;
+        char* key;
 
         size= sizeof(*msg) + syscall_info_size+ extra_key_size;
         msg= kmalloc(size, GFP_KERNEL);
@@ -457,10 +458,14 @@ static int create_syscall_msg(struct ft_pop_rep_id* primary_ft_pop_id, int prima
 	msg->extra_key_size= extra_key_size;
 
 	variable_data= &msg->data;
+
+	key= ft_syscall_get_key(&msg->ft_pop_id, msg->level, msg->id_array, msg->syscall_id);
+	trace_printk("%s %d snd %d %s\n",__func__, primary_level, syscall_id, key);
 	
 	if(syscall_info_size){
 		memcpy(variable_data, syscall_info, syscall_info_size);
 	}
+	kfree(key);
 
 	variable_data= &msg->data+syscall_info_size;
 	if(extra_key_size){
@@ -641,6 +646,7 @@ void* ft_wait_for_syscall_info(struct ft_pid *secondary, int id_syscall){
 
         if((present_info= ((struct wait_syscall*) ft_syscall_hash_add(key, (void*) wait_info)))){
 		FTPRINTK("%s data present, no need to wait\n", __func__);
+		trace_printk("%s data present, no need to wait\n", key);
 
                 kfree(wait_info);
                 free_key= 1;
@@ -648,6 +654,7 @@ void* ft_wait_for_syscall_info(struct ft_pid *secondary, int id_syscall){
         }
         else{
 		FTPRINTK("%s: pid %d going to wait for data\n", __func__, current->pid);
+		trace_printk("%s: pid %d going to wait for data\n", key, current->pid);
 
                 present_info= wait_info;
                 while(present_info->populated==0){
@@ -835,7 +842,9 @@ static int handle_syscall_info_msg(struct pcn_kmsg_message* inc_msg){
 		if(wait_info->extra_key)
 			kfree(wait_info->extra_key);
 		kfree(wait_info);
-        }
+        } else {
+			trace_printk("%s %d rcv %d %s\n",__func__, msg->level, msg->syscall_id, key);
+		}
 
         pcn_kmsg_free_msg(msg);
 
@@ -965,6 +974,7 @@ long syscall_hook_enter(struct pt_regs *regs)
 		trace_printk("syscall %d\n", regs->orig_ax);
                 //printk("Syscall %d on %d\n", regs->orig_ax, current->pid);
                 current->id_syscall++;
+				trace_printk("pid %d syscall %d id %d\n", current->pid, regs->orig_ax, current->id_syscall);
         }
         return regs->orig_ax;
 }
@@ -992,7 +1002,7 @@ static int __init ft_syscall_common_management_init(void) {
 	ft_syscall_info_wq= create_singlethread_workqueue("ft_syscall_info_wq");
 	pcn_kmsg_register_callback(PCN_KMSG_TYPE_FT_SYSCALL_INFO, handle_syscall_info_msg);
 	pcn_kmsg_register_callback(PCN_KMSG_TYPE_FT_SYSCALL_WAKE_UP_INFO, handle_syscall_wake_up_info_msg);
-        syscall_hash= create_hashtable(50);
+        syscall_hash= create_hashtable(1009);
         return 0;
 }
 

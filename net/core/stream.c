@@ -17,6 +17,7 @@
 #include <linux/signal.h>
 #include <linux/tcp.h>
 #include <linux/wait.h>
+#include <linux/ft_replication.h>
 #include <net/sock.h>
 
 /**
@@ -94,6 +95,13 @@ static inline int sk_stream_closing(struct sock *sk)
 
 void sk_stream_wait_close(struct sock *sk, long timeout)
 {
+#ifdef FT_POPCORN
+	if (sk->ft_filter &&
+		ft_is_secondary_replica(current)) {
+		timeout = 0;
+	}
+#endif
+
 	if (timeout) {
 		DEFINE_WAIT(wait);
 

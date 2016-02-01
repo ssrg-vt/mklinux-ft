@@ -216,6 +216,14 @@ static inline int update_token(struct popcorn_namespace *ns)
 				 objPtr->task->current_syscall == __NR_recvmsg ||
 				 objPtr->task->current_syscall == __NR_write ||
 				 objPtr->task->current_syscall == __NR_accept ||
+				 objPtr->task->current_syscall == __NR_time ||
+				 objPtr->task->current_syscall == __NR_poll ||
+				 objPtr->task->current_syscall == __NR_epoll_wait ||
+				 objPtr->task->current_syscall == __NR_gettimeofday ||
+				 objPtr->task->current_syscall == __NR_bind ||
+				 objPtr->task->current_syscall == __NR_wait4 ||
+				 objPtr->task->current_syscall == __NR_nanosleep ||
+				 objPtr->task->current_syscall == __NR_socket ||
 #endif
 				 objPtr->task->ft_det_state == FT_DET_WAIT_TOKEN) {
 				new_token = objPtr;
@@ -252,6 +260,7 @@ static inline int update_tick(struct task_struct *task, long tick)
 	//dump_task_list(ns);
 	spin_lock_irqsave(&ns->task_list_lock, flags);
 	task->ft_det_tick += tick;
+	smp_wmb();
 	update_token(ns);
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	return 1;
@@ -276,6 +285,7 @@ static inline void det_wake_up(struct task_struct *task)
 		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	}
 
+	smp_mb();
 	if (task->ft_det_state == FT_DET_ACTIVE) {
 		__det_start(task);
 	}
@@ -295,10 +305,9 @@ again:
 	spin_lock_irqsave(&ns->task_list_lock, flags);
 	update_token(ns);
 	if (ns->token != NULL && ns->token->task == task) {
-		// For debugging:
 		if (is_det_active(ns, task)) {
 			retry++;
-			printk("WARNING: %d task which does not have the token is in state FT_DET_ACTIVE [%d]\n", ns->token->task->pid, task->pid);
+			printk("WARNING: %d task which does not have the token is in state FT_DET_ACTIVE [%d](%d)\n", ns->token->task->pid, task->pid, retry);
 			spin_unlock_irqrestore(&ns->task_list_lock, flags);
 			if (retry < TOKEN_RETRY)
 				goto again;
