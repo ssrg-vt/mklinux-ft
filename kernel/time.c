@@ -62,13 +62,14 @@ EXPORT_SYMBOL(sys_tz);
  */
 SYSCALL_DEFINE1(time, time_t __user *, tloc)
 {
-#ifdef FT_POPCORN
-	if (ft_is_replicated(current) &&
-		ft_is_secondary_replica(current)) {
-		return ft_time_secondary(tloc);
-	}
-#endif
 
+#ifdef FT_POPCORN
+        long ret;
+        if(ft_is_replicated(current)){
+                ret = ft_time(tloc);
+                return ret;
+        }
+#endif
 	time_t i = get_seconds();
 
 	if (tloc) {
@@ -76,12 +77,7 @@ SYSCALL_DEFINE1(time, time_t __user *, tloc)
 			return -EFAULT;
 	}
 	force_successful_syscall_return();
-#ifdef FT_POPCORN
-	if(ft_is_replicated(current) &&
-		ft_is_primary_replica(current)) {
-		ft_time_primary(tloc, i);
-	}
-#endif
+
 	return i;
 }
 

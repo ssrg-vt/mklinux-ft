@@ -108,19 +108,19 @@ void process_crash_kernel_notification(struct work_struct *work){
                 return;
 	}	
 
-	//trace_printk("filters flushed\n");
+	printk("filters flushed\n");
 	
 	if(trim_stable_buffer_in_filters()){
 		printk("ERROR: %s impossible to trim filters\n", __func__);
                 return;
 	}	
-	//trace_printk("stable buffer trimmed\n");
+	printk("stable buffer trimmed\n");
 
 	if(flush_send_buffer_in_filters()){
                 printk("ERROR: %s impossible to flush send buffers\n", __func__);
                 return;
         }
-        //trace_printk("send buffer flushed\n");
+        printk("send buffer flushed\n");
 	
 	//set the net device up
 	//the idea is to emulate what ifconfig does

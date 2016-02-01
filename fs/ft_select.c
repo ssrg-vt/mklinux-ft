@@ -36,51 +36,79 @@ struct select_wait_info {
 /*
  * Send the poll info to the other side
  */
-int ft_poll_primary(struct pollfd __user *events, int nr_events)
+int ft_poll_primary_after(struct pollfd __user *events, int* ret)
 {
 	struct poll_wait_info *pinfo = NULL;
 	ssize_t pinfo_size;
+	int nr_events= *ret;
 
-	if (nr_events > 0) {
-		pinfo_size = sizeof(struct poll_wait_info) + nr_events * sizeof(struct pollfd);
-	} else {
-		pinfo_size = sizeof(struct poll_wait_info);
-	}
-	pinfo = (struct poll_wait_info *) kmalloc(pinfo_size, GFP_KERNEL);
-
-	if (!pinfo) {
-		printk("epinfo allocation failed!\n");
-		return -ENOMEM;
-	}
-
-	pinfo->nr_events = nr_events;
-
-	if (nr_events > 0) {
-		copy_from_user(pinfo->events, events, nr_events * sizeof(struct pollfd));
-	}
-	
 	if(is_there_any_secondary_replica(current->ft_popcorn)){
+		if (nr_events > 0) {
+			pinfo_size = sizeof(struct poll_wait_info) + nr_events * sizeof(struct pollfd);
+		} else {
+			pinfo_size = sizeof(struct poll_wait_info);
+		}
+		pinfo = (struct poll_wait_info *) kmalloc(pinfo_size, GFP_KERNEL);
+
+		if (!pinfo) {
+			printk("epinfo allocation failed!\n");
+			return -ENOMEM;
+		}
+
+		pinfo->nr_events = nr_events;
+
+		if (nr_events > 0) {
+			copy_from_user(pinfo->events, events, nr_events * sizeof(struct pollfd));
+		}
+		
 		ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) pinfo, pinfo_size);
+
+		kfree(pinfo);
+
 	}
 
-	kfree(pinfo);
-
-	return 0;
+	return FT_SYSCALL_CONTINUE;
 }
 
 /*
  * Wait for the poll info from the other side
  */
-int ft_poll_secondary(struct pollfd __user *events)
+int ft_poll_primary_after_secondary_before(struct pollfd __user *events, int* ret)
 {
-	int ret=0;
+        int i;
+        struct poll_wait_info *pinfo = NULL;
+
+        pinfo = (struct poll_wait_info *) ft_get_pending_syscall_info(&current->ft_pid, current->id_syscall);
+
+        if (!pinfo) {
+                return FT_SYSCALL_CONTINUE;
+        }
+
+        if (pinfo->nr_events > 0) {
+                copy_to_user(events, pinfo->events, pinfo->nr_events * sizeof(struct pollfd));
+        } else {
+                printk("OOPS %d\n", pinfo->nr_events);
+        }
+
+        *ret = pinfo->nr_events;
+        kfree(pinfo);
+
+        return FT_SYSCALL_DROP;
+
+}
+
+/*
+ * Wait for the poll info from the other side
+ */
+int ft_poll_secondary_before(struct pollfd __user *events, int *ret)
+{
 	int i;
 	struct poll_wait_info *pinfo = NULL;
 
 	pinfo = (struct poll_wait_info *) ft_wait_for_syscall_info(&current->ft_pid, current->id_syscall);
 
 	if (!pinfo) {
-		return -EFAULT;
+		return ft_poll_primary_after_secondary_before(events, ret);
 	}
 
 	if (pinfo->nr_events > 0) {
@@ -89,9 +117,30 @@ int ft_poll_secondary(struct pollfd __user *events)
 		printk("OOPS %d\n", pinfo->nr_events);
 	}
 
-	ret = pinfo->nr_events;
+	*ret = pinfo->nr_events;
 	kfree(pinfo);
 
-	return ret;
+	return FT_SYSCALL_DROP;
 
 }
+
+int ft_poll_before(struct pollfd __user *events, int *ret){
+	if(ft_is_replicated(current)){
+		if(ft_is_secondary_replica(current))
+                	return ft_poll_secondary_before(events, ret);
+		if(ft_is_primary_after_secondary_replica(current))
+			return ft_poll_primary_after_secondary_before(events, ret);
+        }
+
+	return FT_SYSCALL_CONTINUE;
+}
+
+int ft_poll_after(struct pollfd __user *events, int *ret){
+        if(ft_is_replicated(current)){
+                if(ft_is_primary_replica(current) || ft_is_primary_after_secondary_replica(current))
+                        return ft_poll_primary_after(events, ret);
+        }
+
+        return FT_SYSCALL_CONTINUE;
+}
+

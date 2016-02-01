@@ -138,14 +138,12 @@ static void* hash_lookup(hash_table_t *hashtable, char *key){
 
         head= hashtable->table[hashval];
         if(head){
-		if(!list_empty(&head->list)){
-			list_for_each_entry(entry, &head->list, list){
-				if((strcmp(entry->string,key)==0)){
-					obj= entry->obj;
-					goto out;
-				}
-
+		list_for_each_entry(entry, &head->list, list){
+			if((strcmp(entry->string,key)==0)){
+				obj= entry->obj;
+				goto out;
 			}
+
 		}
         }
 
@@ -181,16 +179,14 @@ static void* hash_add(hash_table_t *hashtable, char *key, void* obj){
         head= hashtable->table[hashval];
 
         if(head){
-		if(!list_empty(&head->list)){
-			list_for_each_entry(app, &head->list, list){
-				if((strcmp(app->string, key)==0)){
-					entry= app->obj;
-					spin_unlock(&hashtable->spinlock);
-					kfree(new);
-					return entry;
-				}
-
+		list_for_each_entry(app, &head->list, list){
+			if((strcmp(app->string, key)==0)){
+				entry= app->obj;
+				spin_unlock(&hashtable->spinlock);
+				kfree(new);
+				return entry;
 			}
+
 		}
         }
         else{
@@ -229,15 +225,13 @@ static void* hash_remove(hash_table_t *hashtable, char *key){
         spin_lock(&hashtable->spinlock);
         head= hashtable->table[hashval];
         if(head){
-		if(!list_empty(&head->list)){
-			list_for_each_entry(app, &head->list, list){
-				if((strcmp(app->string, key)==0)){
-					entry= app;
-					list_del(&app->list);
-					goto out;
-				}
-
+		list_for_each_entry(app, &head->list, list){
+			if((strcmp(app->string, key)==0)){
+				entry= app;
+				list_del(&app->list);
+				goto out;
 			}
+
 		}
         }
 out:
@@ -307,19 +301,19 @@ char* ft_syscall_get_key(struct ft_pop_rep_id* ft_pop_id, int level, int* id_arr
                 return NULL;
 	}
 
-        pos= snprintf(string, size,"%d.%d.%d", ft_pop_id->kernel, ft_pop_id->id, level);
+        pos= snprintf(string, size,"%d %d %d", ft_pop_id->kernel, ft_pop_id->id, level);
         if(pos>=size)
                 goto out_clean;
 
         if(level){
                 for(i=0;i<level;i++){
-                        pos= pos+ snprintf(&string[pos], size-pos, ".%d", id_array[i]);
+                        pos= pos+ snprintf(&string[pos], size-pos, " %d", id_array[i]);
                         if(pos>=size)
                                 goto out_clean;
                 }
         }
 
-        pos= snprintf(&string[pos], size-pos,".%d%c", id_syscall,'\0');
+        pos= pos+ snprintf(&string[pos], size-pos," %d%c", id_syscall,'\0');
         if(pos>=size)
                 goto out_clean;
 
@@ -332,7 +326,7 @@ out_clean:
 
 }
 
-void ft_get_key_from_filter(struct net_filter_info *filter, const char* pre_append, char **key, int*key_size){
+void ft_get_key_from_filter(struct net_filter_info *filter, const char* pre_append, char **key, int *key_size){
 	char* string;
         const int size= 1024;
         int pos,i;
@@ -343,39 +337,38 @@ void ft_get_key_from_filter(struct net_filter_info *filter, const char* pre_appe
     		*key= NULL;
 	        return;
         }
-
+	
 	pos= snprintf(string, size, "%s", pre_append);
-	pos--;
 	if(pos>=size)
 		goto out_clean;
 
-        pos= snprintf(&string[pos], size-pos,".%d.%d.%d", filter->creator.ft_pop_id.kernel, filter->creator.ft_pop_id.id, filter->creator.level);
+        pos= pos+snprintf(&string[pos], size-pos," %d %d %d", filter->creator.ft_pop_id.kernel, filter->creator.ft_pop_id.id, filter->creator.level);
         if(pos>=size)
                 goto out_clean;
 
         if(filter->creator.level){
                 for(i=0;i<filter->creator.level;i++){
-                        pos= pos+ snprintf(&string[pos], size-pos, ".%d", filter->creator.id_array[i]);
+                        pos= pos+ snprintf(&string[pos], size-pos, " %d", filter->creator.id_array[i]);
                         if(pos>=size)
                                 goto out_clean;
                 }
         }
-
-        pos= snprintf(&string[pos], size-pos,".%d", filter->id);
+        
+	pos= pos+ snprintf(&string[pos], size-pos," %d", filter->id);
         if(pos>=size)
                 goto out_clean;
-
+	
 	if(filter->type & FT_FILTER_CHILD){
-		pos= snprintf(&string[pos], size-pos,".%i.%i", ntohs(filter->tcp_param.daddr), ntohs(filter->tcp_param.dport));
+		pos= pos+ snprintf(&string[pos], size-pos," %i %i", ntohs(filter->tcp_param.daddr), ntohs(filter->tcp_param.dport));
         	if(pos>=size)
                 	goto out_clean;
 
 	}
-
-	pos= snprintf(&string[pos], size-pos,"%c", '\0');
+	
+	pos= pos+ snprintf(&string[pos], size-pos,"%c", '\0');
         if(pos>=size)
                 goto out_clean;
-
+	
 	*key= string;
 	*key_size= size;
         return ;
@@ -460,7 +453,6 @@ static int create_syscall_msg(struct ft_pop_rep_id* primary_ft_pop_id, int prima
 	variable_data= &msg->data;
 
 	key= ft_syscall_get_key(&msg->ft_pop_id, msg->level, msg->id_array, msg->syscall_id);
-	trace_printk("%s %d snd %d %s\n",__func__, primary_level, syscall_id, key);
 	
 	if(syscall_info_size){
 		memcpy(variable_data, syscall_info, syscall_info_size);
@@ -634,7 +626,6 @@ void* ft_wait_for_syscall_info(struct ft_pid *secondary, int id_syscall){
         if(!key)
                 return ERR_PTR(-ENOMEM);
 
-	trace_printk("waiting on key %s\n", key);
         wait_info= kmalloc(sizeof(*wait_info), GFP_ATOMIC);
         if(!wait_info)
                 return ERR_PTR(-ENOMEM);
@@ -646,7 +637,6 @@ void* ft_wait_for_syscall_info(struct ft_pid *secondary, int id_syscall){
 
         if((present_info= ((struct wait_syscall*) ft_syscall_hash_add(key, (void*) wait_info)))){
 		FTPRINTK("%s data present, no need to wait\n", __func__);
-		trace_printk("%s data present, no need to wait\n", key);
 
                 kfree(wait_info);
                 free_key= 1;
@@ -654,7 +644,6 @@ void* ft_wait_for_syscall_info(struct ft_pid *secondary, int id_syscall){
         }
         else{
 		FTPRINTK("%s: pid %d going to wait for data\n", __func__, current->pid);
-		trace_printk("%s: pid %d going to wait for data\n", key, current->pid);
 
                 present_info= wait_info;
                 while(present_info->populated==0){
@@ -702,18 +691,16 @@ static int ft_wake_up_primary_after_secondary(void){
 	for(i=0; i<syscall_hash->size; i++){
 		head= syscall_hash->table[i];
 		if(head){
-			if(!list_empty(&head->list)){
-				list_for_each_entry(app, &head->list, list){
-					if(!app->obj){
-						ret= -EFAULT;
-						printk("ERROR: %s no obj field\n", __func__);
-						goto out;
-					}
-					wait_info= (struct wait_syscall*) app->obj;
-					if(wait_info->task && ft_is_primary_after_secondary_replica(wait_info->task)){
-						wait_info->populated= 1;
-						wake_up_process(wait_info->task);
-					}
+			list_for_each_entry(app, &head->list, list){
+				if(!app->obj){
+					ret= -EFAULT;
+					printk("ERROR: %s no obj field\n", __func__);
+					goto out;
+				}
+				wait_info= (struct wait_syscall*) app->obj;
+				if(wait_info->task && ft_is_primary_after_secondary_replica(wait_info->task)){
+					wait_info->populated= 1;
+					wake_up_process(wait_info->task);
 				}
 			}
 		}
@@ -740,17 +727,15 @@ int ft_are_syscall_extra_key_present(char * key){
         for(i=0; i<syscall_hash->size; i++){
                 head= syscall_hash->table[i];
                 if(head){
-			if(!list_empty(&head->list)){
-				list_for_each_entry(app, &head->list, list){
-					if(!app->obj){
-						ret= -EFAULT;
-						printk("ERROR: %s no obj field\n", __func__);
-						goto out;
-					}
-					wait_info= (struct wait_syscall*) app->obj;
-					if(wait_info->extra_key && (strcmp(wait_info->extra_key, key)==0)){
-						ret++;
-					}
+			list_for_each_entry(app, &head->list, list){
+				if(!app->obj){
+					ret= -EFAULT;
+					printk("ERROR: %s no obj field\n", __func__);
+					goto out;
+				}
+				wait_info= (struct wait_syscall*) app->obj;
+				if(wait_info->extra_key && (strcmp(wait_info->extra_key, key)==0)){
+					ret++;
 				}
 			}
                 }
@@ -824,6 +809,8 @@ static int handle_syscall_info_msg(struct pcn_kmsg_message* inc_msg){
 
 		memcpy(wait_info->extra_key, private+ msg->syscall_info_size, msg->extra_key_size);
 	}
+	else
+		wait_info->extra_key= NULL;
 
         wait_info->task= NULL;
         wait_info->populated= 1;
@@ -842,9 +829,8 @@ static int handle_syscall_info_msg(struct pcn_kmsg_message* inc_msg){
 		if(wait_info->extra_key)
 			kfree(wait_info->extra_key);
 		kfree(wait_info);
-        } else {
-			trace_printk("%s %d rcv %d %s\n",__func__, msg->level, msg->syscall_id, key);
-		}
+        } 
+	
 
         pcn_kmsg_free_msg(msg);
 
@@ -974,7 +960,7 @@ long syscall_hook_enter(struct pt_regs *regs)
 		trace_printk("syscall %d\n", regs->orig_ax);
                 //printk("Syscall %d on %d\n", regs->orig_ax, current->pid);
                 current->id_syscall++;
-				trace_printk("pid %d syscall %d id %d\n", current->pid, regs->orig_ax, current->id_syscall);
+		
         }
         return regs->orig_ax;
 }

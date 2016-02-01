@@ -272,14 +272,16 @@ int flush_send_buffer_in_filters(void);
 int dec_and_check_pending_send_on_send_buffer(struct send_buffer *send_buffer);
 int flush_send_buffer(struct send_buffer *send_buffer, struct sock* sock);
 int is_send_buffer_flushed(struct send_buffer *send_buffer);
+int is_send_buffer_flushing(struct send_buffer *send_buffer);
 int send_zero_window_in_filters(void);
 
-int ft_poll_secondary(struct pollfd __user *events);
-int ft_poll_primary(struct pollfd __user *events, int nr_events);
+//int ft_poll_secondary(struct pollfd __user *events);
+//int ft_poll_primary(struct pollfd __user *events, int nr_events);
+int ft_poll_after(struct pollfd __user *events, int *ret);
+int ft_poll_before(struct pollfd __user *events, int *ret);
 long ft_gettimeofday_primary(struct timeval __user * tv, struct timezone __user * tz);
 long ft_gettimeofday_secondary(struct timeval __user * tv, struct timezone __user * tz);
-long ft_time_secondary(time_t __user *tloc);
-long ft_time_primary(time_t __user *tloc, long ret);
+long ft_time(time_t __user *tloc);
 
 #define DUMMY_DRIVER "ft_dummy_driver"
 

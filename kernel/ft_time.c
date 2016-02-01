@@ -11,6 +11,7 @@
 #include <asm/uaccess.h>
 #include <linux/time.h>
 #include <linux/sched.h>
+#include <linux/ptrace.h>
 
 #define FT_TIME_VERBOSE 0
 #if FT_TIME_VERBOSE
@@ -154,22 +155,45 @@ struct time_info {
 	long   ret;
 };
 
-long ft_time_primary(time_t __user *tloc, long ret)
+long ft_time_primary(time_t __user *tloc)
 {
 	struct time_info *timeinfo;
+	time_t i = get_seconds();
 
-	timeinfo = kmalloc(sizeof(struct time_info), GFP_KERNEL);
-	get_user(timeinfo->tloc, tloc);
-	timeinfo->ret = ret;
+        if (tloc) {
+                if (put_user(i,tloc))
+                        return -EFAULT;
+        }
+        force_successful_syscall_return();
 
 	if(is_there_any_secondary_replica(current->ft_popcorn)){
+		timeinfo = kmalloc(sizeof(struct time_info), GFP_KERNEL);
+        	memcpy(&timeinfo->tloc, &i, sizeof(i));
+        	timeinfo->ret = i;
 		ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, timeinfo, sizeof(struct time_info));
+		kfree(timeinfo);
+		FTPRINTK("sending time for syscall %d - %d - %d\n", current->id_syscall, current->pid, ret);
 	}
-	FTPRINTK("sending time for syscall %d - %d - %d\n", current->id_syscall, current->pid, ret);
 
-	kfree(timeinfo);
+	return i;
 
-	return 0;
+}
+
+long ft_time_primary_after_secondary(time_t __user *tloc)
+{
+        struct time_info *timeinfo;
+        long ret= 0;
+
+        timeinfo = (struct time_info *) ft_get_pending_syscall_info(&current->ft_pid, current->id_syscall);
+        if(timeinfo){
+                ret = timeinfo->ret;
+                put_user(timeinfo->tloc, tloc);
+                kfree(timeinfo);
+		return ret;
+        }
+        else{
+        	return ft_time_primary(tloc);
+	}
 
 }
 
@@ -180,6 +204,10 @@ long ft_time_secondary(time_t __user *tloc)
 
 	FTPRINTK("waiting for time %d - %d\n", current->id_syscall, current->pid);
 	timeinfo = (struct time_info *) ft_wait_for_syscall_info(&current->ft_pid, current->id_syscall);
+	if(!timeinfo){
+		return ft_time_primary_after_secondary(tloc);
+	}
+
 	ret = timeinfo->ret;
 	put_user(timeinfo->tloc, tloc);
 	kfree(timeinfo);
@@ -187,3 +215,27 @@ long ft_time_secondary(time_t __user *tloc)
 
 	return ret;
 }
+
+long ft_time(time_t __user *tloc){
+
+        if(ft_is_primary_replica(current)){
+                return ft_time_primary(tloc);
+        }
+        else{
+                if(ft_is_secondary_replica(current)){
+                        return ft_time_secondary(tloc);
+                }
+                else{
+                        if(ft_is_primary_after_secondary_replica(current)){
+                                return ft_time_primary_after_secondary(tloc);
+                        }
+                        else
+                                return -EFAULT;
+                }
+
+        }
+
+        return 0;
+
+}
+

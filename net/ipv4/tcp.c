@@ -1880,6 +1880,19 @@ void tcp_close(struct sock *sk, long timeout)
 	int data_was_unread = 0;
 	int state;
 
+#ifdef FT_POPCORN
+	if(sk->ft_filter){
+		if(ft_is_filter_secondary(sk->ft_filter)){
+			spin_lock_bh(&sk->ft_filter->lock);
+			while(is_send_buffer_flushing(sk->ft_filter->send_buffer)){
+				spin_unlock_bh(&sk->ft_filter->lock);
+				msleep(20);
+				spin_lock_bh(&sk->ft_filter->lock);
+			}
+        		spin_unlock_bh(&sk->ft_filter->lock);
+		}
+	}
+#endif
 	lock_sock(sk);
 	sk->sk_shutdown = SHUTDOWN_MASK;
 
@@ -2028,15 +2041,17 @@ adjudge_to_death:
 		inet_csk_destroy_sock(sk);
 	/* Otherwise, socket is reprieved until protocol close. */
 
-#ifdef FT_POPCORN
-	if(sk->ft_filter){
-		spin_lock_bh(&sk->ft_filter->lock);
-		sk->ft_filter->ft_tcp_closed=1;
-		spin_unlock_bh(&sk->ft_filter->lock);
-	}
-#endif
 out:
 	bh_unlock_sock(sk);
+
+#ifdef FT_POPCORN
+        if(sk->ft_filter){
+                spin_lock_bh(&sk->ft_filter->lock);
+                sk->ft_filter->ft_tcp_closed=1;
+                spin_unlock_bh(&sk->ft_filter->lock);
+        }
+#endif
+
 	local_bh_enable();
 	sock_put(sk);
 }

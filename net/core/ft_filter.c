@@ -561,6 +561,9 @@ int is_send_buffer_flushed(struct send_buffer *send_buffer){
 	return send_buffer->flushed==1;
 }
 
+int is_send_buffer_flushing(struct send_buffer *send_buffer){
+	return send_buffer->flushed==2;
+}
 /* Adds @size bytes copied from @iov to the @send_buffer. It also computes the csum of the data and stores it in *@csum.  
  *
  * NOTE: if last_ack received is greater than first_byte_to_consume, the first last_ack-first_byte_to_consume bytes of @iov won't be copied
@@ -6408,22 +6411,55 @@ int flush_send_buffer_in_filters(void){
         if(!list_empty(&filter_list_head)){
                 list_for_each(iter, &filter_list_head) {
                         filter = list_entry(iter, struct net_filter_info, list_member);
-                        if(filter->type & FT_FILTER_ENABLE){
+			//spin_lock_bh(&filter->lock);
+                        if( !(filter->type & FT_FILTER_FAKE) && (filter->type & FT_FILTER_ENABLE) && filter->ft_sock && filter->ft_sock->sk_state!=TCP_CLOSE
+					 && filter->ft_sock->sk_state!=TCP_FIN_WAIT1
+					 && filter->ft_sock->sk_state!=TCP_FIN_WAIT2
+					 && filter->ft_sock->sk_state!=TCP_TIME_WAIT
+					 && filter->ft_sock->sk_state!=TCP_CLOSE_WAIT
+					 && filter->ft_sock->sk_state!=TCP_LAST_ACK
+					 && filter->ft_sock->sk_state!=TCP_CLOSING){
+				
+				//spin_unlock_bh(&filter->lock);
+				
 				ft_get_key_from_filter(filter,"SEND", &key, &pending_send_syscall);
-				if(!key)
+				if(!key){
 					goto out;
+				}
 				pending_send_syscall= ft_are_syscall_extra_key_present(key);
                              	kfree(key);
 				if(pending_send_syscall){
 					set_pending_send_on_send_buffer(filter->send_buffer, pending_send_syscall);		
 				}
 				else{
-					ret= flush_send_buffer(filter->send_buffer, filter->ft_sock);
-					if(ret)
-                                		goto out;
+					//spin_lock_bh(&filter->lock);
+					if(filter->type & FT_FILTER_ENABLE && filter->ft_sock && filter->ft_sock->sk_state!=TCP_CLOSE
+						 && filter->ft_sock->sk_state!=TCP_FIN_WAIT1
+						 && filter->ft_sock->sk_state!=TCP_FIN_WAIT2
+						 && filter->ft_sock->sk_state!=TCP_TIME_WAIT
+						 && filter->ft_sock->sk_state!=TCP_CLOSE_WAIT
+						 && filter->ft_sock->sk_state!=TCP_LAST_ACK
+						 && filter->ft_sock->sk_state!=TCP_CLOSING){
+						
+						filter->send_buffer->flushed= 2;
+					       // spin_unlock_bh(&filter->lock);	
+						ret= flush_send_buffer(filter->send_buffer, filter->ft_sock);
+						if(ret){
+							//spin_unlock_bh(&filter->lock);
+							goto out;
+						}
+						else{
+							//spin_unlock_bh(&filter->lock);
+						}
+					}
+					else{
+						//spin_unlock_bh(&filter->lock);
+					}	
 				}
                         }
-
+			else{
+				//spin_lock_bh(&filter->lock);
+			}
                 }
         }
 

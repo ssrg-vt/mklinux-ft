@@ -857,8 +857,8 @@ static int after_syscall_send_family_primary(struct socket* sock, int ret){
 	if(is_there_any_secondary_replica(current->ft_popcorn)){	
 
 		ft_get_key_from_filter(sock->sk->ft_filter,"SEND", &extra_key, &size_extra_key);
-
-		ft_send_syscall_info_extra_key(current->ft_popcorn, &current->ft_pid, current->id_syscall, extra_key, (extra_key==NULL)?0:size_extra_key,  (char*) syscall_info, sizeof(*syscall_info));
+		printk("sending %s\n", extra_key);
+		ft_send_syscall_info_extra_key( current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) syscall_info, sizeof(*syscall_info), extra_key, (extra_key==NULL)?0:size_extra_key);
 
 		if(extra_key)
 	                kfree(extra_key);
