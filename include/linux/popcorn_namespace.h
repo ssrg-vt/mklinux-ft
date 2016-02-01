@@ -153,9 +153,11 @@ static inline int add_task_to_ns(struct popcorn_namespace *ns, struct task_struc
 
 	task->ft_det_tick = 0;
 	new_task->task = task;
-	ns->task_count++;
 	spin_lock_irqsave(&ns->task_list_lock, flags);
+	mb();
+	ns->task_count++;
 	list_add_tail(&new_task->task_list_member, &ns->ns_task_list.task_list_member);
+	mb();
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	return 0;
 }
@@ -169,6 +171,7 @@ static inline int remove_task_from_ns(struct popcorn_namespace *ns, struct task_
 	unsigned long flags;
 
 	spin_lock_irqsave(&ns->task_list_lock, flags);
+	mb();
 	list_for_each_safe(iter, n, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		if (objPtr->task == task) {
@@ -176,6 +179,7 @@ static inline int remove_task_from_ns(struct popcorn_namespace *ns, struct task_
 			kfree(iter);
 			update_token(ns);
 			ns->task_count--;
+			mb();
 			spin_unlock_irqrestore(&ns->task_list_lock, flags);
 #ifdef DET_PROF
 			printk("tick_count now for %d %llu %llu %llu\n", task->pid % 64, ns->start_cost[task->pid % 64], ns->tick_cost[task->pid % 64], ns->end_cost[task->pid % 64]);
@@ -187,6 +191,7 @@ static inline int remove_task_from_ns(struct popcorn_namespace *ns, struct task_
 			return 0;
 		}
 	}
+	mb();
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 
 	return -1;
@@ -239,12 +244,16 @@ static inline int update_token(struct popcorn_namespace *ns)
 	 *else if ((ns->token == NULL || ns->token->task == NULL) && (new_token == NULL || new_token->task == NULL))
 	 *    trace_printk("token from NULL to NULL\n");
 	 */
+	mb();
 	ns->token = new_token;
+	mb();
 	if (ns->token != NULL &&
 			ns->token->task != NULL) {
 		ns->last_tick = ns->token->task->ft_det_tick;
+		mb();
 		if (ns->token->task->state == TASK_INTERRUPTIBLE &&
 				ns->token->task->ft_det_state == FT_DET_WAIT_TOKEN) {
+			mb();
 			wake_up_process(ns->token->task);
 		}
 	}
@@ -260,9 +269,11 @@ static inline int update_tick(struct task_struct *task, long tick)
 
 	//dump_task_list(ns);
 	spin_lock_irqsave(&ns->task_list_lock, flags);
+	mb();
 	task->ft_det_tick += tick;
-	smp_wmb();
+	mb();
 	update_token(ns);
+	mb();
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	return 1;
 }
@@ -276,17 +287,16 @@ static inline void det_wake_up(struct task_struct *task)
 	ns = task->nsproxy->pop_ns;
 
 	spin_lock_irqsave(&ns->task_list_lock, flags);
+	mb();
 
 	if (ns->last_tick > task->ft_det_tick) {
 		task->ft_det_tick = ns->last_tick;
-		update_token(ns);
-		spin_unlock_irqrestore(&ns->task_list_lock, flags);
-	} else {
-		update_token(ns);
-		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	}
+	mb();
+	update_token(ns);
+	mb();
+	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 
-	smp_mb();
 	if (task->ft_det_state == FT_DET_ACTIVE) {
 		__det_start(task);
 	}
@@ -303,24 +313,23 @@ static inline int have_token(struct task_struct *task)
 	ns = task->nsproxy->pop_ns;
 
 again:
-	spin_lock_irqsave(&ns->task_list_lock, flags);
+	task->ft_det_state = FT_DET_WAIT_TOKEN;
+	mb();
 	update_token(ns);
+	mb();
 	if (ns->token != NULL && ns->token->task == task) {
 		if (is_det_active(ns, task)) {
 			retry++;
 			printk("WARNING: %d task which does not have the token is in state FT_DET_ACTIVE [%d](%d)\n", ns->token->task->pid, task->pid, retry);
-			spin_unlock_irqrestore(&ns->task_list_lock, flags);
-			if (retry < TOKEN_RETRY)
+			if (retry < TOKEN_RETRY) {
 				goto again;
-			else {
+			} else {
 				printk("[%d][%d] Critical token error\n", ns->token->task->pid, task->pid);
 				return 1;
 			}
 		}
-		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 		return 1;
 	} else {
-		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 		return 0;
 	}
 }
@@ -336,7 +345,8 @@ static inline int is_det_active(struct popcorn_namespace *ns, struct task_struct
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		if (objPtr->task->ft_det_state == FT_DET_ACTIVE) {
 			if ((task == NULL || objPtr->task != task) &&
-					!(objPtr->task->state == TASK_INTERRUPTIBLE && objPtr->task->current_syscall == __NR_futex)) {
+					!(objPtr->task->current_syscall == __NR_futex)) {
+				printk("(%d)[%d]%d holding token while (%d)[%d]%d asking for it\n", objPtr->task->pid, objPtr->task->current_syscall, objPtr->task->state, task->pid, task->current_syscall, task->state);
 				return 1;
 			}
 		}

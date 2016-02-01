@@ -215,24 +215,33 @@ long __det_start(struct task_struct *task)
 		return 0;
 	}
 
+	trace_printk("det \n");
 	ns = task->nsproxy->pop_ns;
 #ifdef DET_PROF
 	dtime = (uint64_t) ktime_get().tv64;
 #endif
 
+	set_task_state(task, TASK_INTERRUPTIBLE);
+	mb();
 	for (;;) {
 		spin_lock_irqsave(&ns->task_list_lock, flags);
-		task->ft_det_state = FT_DET_WAIT_TOKEN;
-		spin_unlock_irqrestore(&ns->task_list_lock, flags);
-		set_task_state(task, TASK_INTERRUPTIBLE);
 		if (have_token(task)) {
+			spin_unlock_irqrestore(&ns->task_list_lock, flags);
+			mb();
 			set_task_state(task, TASK_RUNNING);
 			break;
+		} else {
+			spin_unlock_irqrestore(&ns->task_list_lock, flags);
+			mb();
 		}
+		mb();
 		schedule();
 	}
+	trace_printk("det f \n");
 	spin_lock_irqsave(&ns->task_list_lock, flags);
+	mb();
 	task->ft_det_state = FT_DET_ACTIVE;
+	mb();
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	//trace_printk("has token with %d\n", task->ft_det_tick);
 #ifdef DET_PROF
@@ -258,6 +267,7 @@ asmlinkage long sys_popcorn_det_tick(long tick)
 #endif
 
 	if(is_popcorn(current)) {
+	trace_printk("\n");
 #ifdef DET_PROF
 		dtime = (uint64_t) ktime_get().tv64;
 #endif
@@ -268,6 +278,7 @@ asmlinkage long sys_popcorn_det_tick(long tick)
 		ns->tick_cost[current->pid % 64] += dtime;
 		spin_unlock(&(ns->tick_cost_lock));
 #endif
+		trace_printk("f \n");
 		return 0;
 	}
 
@@ -285,6 +296,7 @@ long __det_end(struct task_struct *task)
 	if(!is_popcorn(task)) {
 		return 0;
 	}
+	trace_printk("\n");
 
 	//trace_printk("end with %d\n", task->ft_det_tick);
 #ifdef DET_PROF
@@ -292,7 +304,12 @@ long __det_end(struct task_struct *task)
 #endif
 	ns = task->nsproxy->pop_ns;
 
+	spin_lock_irqsave(&ns->task_list_lock, flags);
+	mb();
 	task->ft_det_state = FT_DET_INACTIVE;
+	mb();
+	spin_unlock_irqrestore(&ns->task_list_lock, flags);
+	mb();
 	update_tick(task, 1);
 	//dump_task_list(ns);
 
@@ -302,6 +319,7 @@ long __det_end(struct task_struct *task)
 	ns->end_cost[task->pid % 64] += dtime;
 	spin_unlock(&(ns->tick_cost_lock));
 #endif
+	trace_printk("f \n");
 	return ns->token->task->pid;
 }
 
