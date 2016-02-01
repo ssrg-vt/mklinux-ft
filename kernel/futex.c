@@ -1772,9 +1772,10 @@ static void futex_wait_queue_me(struct futex_hash_bucket *hb, struct futex_q *q,
 //#ifndef DETONLY
 	if (is_popcorn(current)) {
 		ns = current->nsproxy->pop_ns;
-		smp_mb();
 		spin_lock(&ns->task_list_lock);
+		mb();
 		update_token(ns);
+		mb();
 		spin_unlock(&ns->task_list_lock);
 	}
 //#endif
@@ -1802,6 +1803,16 @@ static void futex_wait_queue_me(struct futex_hash_bucket *hb, struct futex_q *q,
 			schedule();
 	}
 	__set_current_state(TASK_RUNNING);
+
+//#ifndef DETONLY
+	if (is_popcorn(current)) {
+		ns = current->nsproxy->pop_ns;
+		spin_lock(&ns->task_list_lock);
+		mb();
+		update_token(ns);
+		mb();
+		spin_unlock(&ns->task_list_lock);
+	}
 }
 
 /**
@@ -2670,7 +2681,7 @@ long do_futex(u32 __user *uaddr, int op, u32 val, ktime_t *timeout,
 		val3 = FUTEX_BITSET_MATCH_ANY;
 	case FUTEX_WAIT_BITSET:
 		ret = futex_wait(uaddr, flags, val, timeout, val3);
-		// At this point the det state could be DET_ACTIVE
+		// At this point the det state be DET_ACTIVE
 		if (is_popcorn(current)) {
 			det_wake_up(current);
 		}
