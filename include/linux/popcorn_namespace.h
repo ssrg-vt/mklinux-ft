@@ -13,6 +13,7 @@
 #include <linux/kref.h>
 #include <linux/list.h>
 #include <linux/slab.h>
+#include <linux/delay.h>
 #include <linux/ft_common_syscall_management.h>
 
 // If AGGRESSIVE_DET is enabled, for all the blocking system calls,
@@ -250,6 +251,7 @@ static inline int update_token(struct popcorn_namespace *ns)
 	mb();
 	if (ns->token != NULL &&
 			ns->token->task != NULL) {
+		mb();
 		ns->last_tick = ns->token->task->ft_det_tick;
 		mb();
 		if (ns->token->task->state == TASK_INTERRUPTIBLE &&
@@ -341,6 +343,7 @@ static inline int is_det_active(struct popcorn_namespace *ns, struct task_struct
 {
 	struct list_head *iter= NULL;
 	struct task_list *objPtr;
+	unsigned long flags;
 
 	list_for_each(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
@@ -348,6 +351,10 @@ static inline int is_det_active(struct popcorn_namespace *ns, struct task_struct
 			if ((task == NULL || objPtr->task != task) &&
 					!(objPtr->task->current_syscall == __NR_futex)) {
 				printk("(%d)[%d]%d holding token while (%d)[%d]%d asking for it\n", objPtr->task->pid, objPtr->task->current_syscall, objPtr->task->state, task->pid, task->current_syscall, task->state);
+				// here I give you one moment to figure out the token
+				spin_unlock_irqrestore(&ns->task_list_lock, flags);
+				mdelay(2);
+				spin_lock_irqsave(&ns->task_list_lock, flags);
 				return 1;
 			}
 		}
