@@ -985,6 +985,15 @@ finish:
 
 }
 
+int is_stable_buffer_empty(struct stable_buffer *stable_buffer){
+	int ret= 1;
+	if(stable_buffer){
+		if(!(stable_buffer->first_byte_to_consume == 0 || list_empty(&stable_buffer->stable_buffer_head)))
+			ret= 0;
+	}
+	return ret;
+}
+
 /* Copies the first contiguous bytes from @stable_buffer to iov up to @size bytes.
  * 
  * This function will update first_byte_to_consume of the amount of data copied. 
@@ -2324,7 +2333,7 @@ static unsigned int ft_hook_after_network_layer_secondary_tcp(struct net_filter_
         if(filter_id_printed)
                 kfree(filter_id_printed);
 #endif
-	FTMPRINTK("%s dropping packt\n", __func__);
+	trace_printk("dropping packt\n");
 	
 	kfree_skb(skb);
         return NF_STOLEN;
@@ -3063,7 +3072,7 @@ check_syn:
 			trace_printk("WARNING not possible to recreate syn packt to inject port %d\n", htons(my_work->port));
                         goto out;
 		}
-		trace_printk("reinjecting syn port %d\n", htons(my_work->port));
+		//trace_printk("reinjecting syn port %d\n", htons(my_work->port));
 		
 		skb= create_skb_from_rx_copy_msg(my_work->syn_msg, listen_filter);
 	        if(IS_ERR(skb)){
@@ -3121,7 +3130,7 @@ check_ack:
                         goto out;
                 }
 
-                trace_printk("reinjecting ack port %d\n", htons(my_work->port));
+                //trace_printk("reinjecting ack port %d\n", htons(my_work->port));
                 skb= create_skb_from_rx_copy_msg(my_work->ack_msg, listen_filter);
                 if(IS_ERR(skb)){
                         printk("ERROR %s impossible to create skb\n", __func__);
@@ -5301,6 +5310,8 @@ unsigned int ft_hook_before_tcp_primary_after_secondary(struct sk_buff *skb, str
 	struct request_sock **prev;
         struct request_sock *req;
 	int actual_data_size, data_to_keep;
+	struct handshake_work *hand_work;
+	unsigned int ret;
 
 	/* The idea is to just let transit all packets but change the seq 
 	 * and ack_seq to be aligned with the status on the current socket.
@@ -5414,11 +5425,12 @@ unsigned int ft_hook_before_tcp_primary_after_secondary(struct sk_buff *skb, str
 			//code for sending and ack for the retransmitted data directly from here.
 			//it acks just old received data
 
-			if(TCP_SKB_CB(skb)->end_seq -tcp_header->syn -tcp_header->fin <= get_last_byte_received_stable_buffer(filter->stable_buffer)+1)
+			if(TCP_SKB_CB(skb)->end_seq -tcp_header->syn -tcp_header->fin <= get_last_byte_received_stable_buffer(filter->stable_buffer)+1){
 				//send_ack(sk, TCP_SKB_CB(skb)->ack_seq + filter->idelta_seq, TCP_SKB_CB(skb)->end_seq -tcp_header->syn -tcp_header->fin + filter->odelta_seq, 65535U);
+				trace_printk("sending ack\n");
 				send_ack(sk, get_oseq_in(filter, TCP_SKB_CB(skb)->ack_seq), get_iseq_in(filter, TCP_SKB_CB(skb)->end_seq -tcp_header->syn -tcp_header->fin), 65535U);
-							
-		
+								
+			}
 			//remove the previous data and let it transit with same ack
 			actual_data_size=  size -tcp_header->syn -tcp_header->fin;
 			data_to_keep= TCP_SKB_CB(skb)->end_seq -tcp_header->syn -tcp_header->fin -(get_last_byte_received_stable_buffer(filter->stable_buffer)+1);
@@ -5469,6 +5481,20 @@ unsigned int ft_hook_before_tcp_primary_after_secondary(struct sk_buff *skb, str
 		start= ntohl(tcp_header->seq);
 		end= ntohl(tcp_header->seq)+ tcp_header->syn+ tcp_header->fin+ skb->len- tcp_header->doff*4;
 		size= end-start;
+
+		/*check that I am not opening a pending connection from the worker thread in parallel*/
+		hand_work= get_handshake_work(iph->saddr, tcp_header->source);
+
+        	if(hand_work){
+                	spin_lock_bh(&hand_work->lock);
+                	if(hand_work->completed){
+				ret= NF_DROP;
+			}
+			spin_unlock_bh(&hand_work->lock);
+			put_handshake_work(hand_work);
+		}
+		if(ret==NF_DROP)
+			return ret;
 	
 		req = inet_csk_search_req(sk, &prev, tcp_header->source, iph->saddr, iph->daddr);
 		if(req){
@@ -5504,10 +5530,11 @@ unsigned int ft_hook_before_tcp_primary_after_secondary(struct sk_buff *skb, str
 			}
 		}
 
-		//trace_printk("%s listening skb %p: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i \n", __func__, skb, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
+		trace_printk("%s listening skb %p: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i \n", __func__, skb, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
 
 		if(!req && !tcp_header->syn && tcp_header->ack){
 			//could be for pending connection
+			trace_printk("trying to compleate handshake\n");
 			return try_complete_handshake_seq_from_hook(skb, filter);
 		}
 		
@@ -5530,7 +5557,7 @@ unsigned int ft_hook_before_tcp_primary_after_secondary(struct sk_buff *skb, str
 		size= end-start;
 
 		//trace_printk("tcp_sk(sk)->rcv_nxt %u tcp_sk(sk)->snd_nxt %u\n",tcp_sk(sk)->rcv_nxt, tcp_sk(sk)->snd_nxt);
-		//trace_printk("%s before status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", __func__, filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source)); 
+		trace_printk("%s before status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", __func__, filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source)); 
 		 
 		 /* Let the packet transit to close connections 
 		  * but change seq/ack_seq
@@ -5546,7 +5573,7 @@ unsigned int ft_hook_before_tcp_primary_after_secondary(struct sk_buff *skb, str
 		start= ntohl(tcp_header->seq);
 		end= ntohl(tcp_header->seq)+ tcp_header->syn+ tcp_header->fin+ skb->len- tcp_header->doff*4;
 		size= end-start;
-		//trace_printk("%s status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", __func__, filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
+		trace_printk("%s status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", __func__, filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
 
 		 return NF_ACCEPT;
 		}
@@ -5737,7 +5764,7 @@ unsigned int ft_hook_before_tcp_secondary(struct sk_buff *skb, struct net_filter
 			tcp_header->check = 0;
 			tcp_header->check= checksum_tcp_rx(skb, skb->len, iph, tcp_header);
 
-			//trace_printk("status %i fin %d ack %d seq %u ack seq %u tp rcv next %u snd next %u port %i\n", sk->sk_state, tcp_header->fin, tcp_header->ack, ntohl(tcp_header->seq), ntohl(tcp_header->ack_seq), tcp_sk(sk)->rcv_nxt, tcp_sk(sk)->snd_nxt, ntohs(tcp_header->source));
+			trace_printk("status %i fin %d ack %d seq %u ack seq %u tp rcv next %u snd next %u port %i\n", sk->sk_state, tcp_header->fin, tcp_header->ack, ntohl(tcp_header->seq), ntohl(tcp_header->ack_seq), tcp_sk(sk)->rcv_nxt, tcp_sk(sk)->snd_nxt, ntohs(tcp_header->source));
 
 			return NF_ACCEPT;
 		}
@@ -5771,9 +5798,7 @@ unsigned int ft_hook_before_tcp_secondary(struct sk_buff *skb, struct net_filter
                 }
 
 		
-		/*printk("%s letting pckt transiting on status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", __func__, filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
-
-		*/
+		trace_printk("letting pckt transiting on status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
 
 		bh_lock_sock_nested(sk);
 		req = inet_csk_search_req(sk, &prev, tcp_header->source, iph->saddr, iph->daddr);
@@ -6216,7 +6241,7 @@ unsigned int ft_hook_after_transport_layer_primary_after_secondary(struct net_fi
 		tcp_header = tcp_hdr(skb);
 		iph= ip_hdr(skb);
 
-		trace_printk("before: syn %u ack %u fin %u seq %u ack_seq %u\n", tcp_header->syn, tcp_header->ack, tcp_header->fin, ntohl(tcp_header->seq), ntohl( tcp_header->ack_seq));
+		//trace_printk("before: syn %u ack %u fin %u seq %u ack_seq %u\n", tcp_header->syn, tcp_header->ack, tcp_header->fin, ntohl(tcp_header->seq), ntohl( tcp_header->ack_seq));
 
 		//trace_printk("%s filter->odelta_seq %u filter->idelta_seq %u\n", __func__, filter->odelta_seq, filter->idelta_seq);
 
@@ -6235,7 +6260,7 @@ unsigned int ft_hook_after_transport_layer_primary_after_secondary(struct net_fi
 		tcp_header->check = 0;
 		tcp_header->check= checksum_tcp_tx(skb, skb->len - ip_hdrlen(skb), iph, tcp_header);
 
-		trace_printk("after: syn %u ack %u fin %u seq %u ack_seq %u\n", tcp_header->syn, tcp_header->ack, tcp_header->fin, ntohl(tcp_header->seq), ntohl( tcp_header->ack_seq));
+		//trace_printk("after: syn %u ack %u fin %u seq %u ack_seq %u\n", tcp_header->syn, tcp_header->ack, tcp_header->fin, ntohl(tcp_header->seq), ntohl( tcp_header->ack_seq));
 
 		return NF_ACCEPT;
 		
@@ -6381,6 +6406,7 @@ int trim_stable_buffer_in_filters(void){
 				//char* filter_print= print_filter_id(filter);
 				//printk("%s :",filter_print);
 				//kfree(filter_print);
+				printk("going to trim port %d\n", ntohs(filter->tcp_param.dport));
 				ret= trim_stable_buffer(filter->stable_buffer);
 				if(ret)
                                 	goto out;
@@ -6442,6 +6468,7 @@ int flush_send_buffer_in_filters(void){
 						 && filter->ft_sock->sk_state!=TCP_CLOSING){
 						
 						filter->send_buffer->flushed= 2;
+						trace_printk("flushing send buffer port %d", ntohs(filter->tcp_param.dport));
 					       // spin_unlock_bh(&filter->lock);	
 						ret= flush_send_buffer(filter->send_buffer, filter->ft_sock);
 						if(ret){

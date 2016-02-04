@@ -267,6 +267,7 @@ struct sock *ft_syscall_accept(struct request_sock_queue *queue, struct sock *pa
 int remove_and_copy_from_stable_buffer(struct stable_buffer *stable_buffer, struct iovec* iov, int size);
 int insert_in_send_buffer_and_csum(struct send_buffer *send_buffer, struct iovec *iov, int iovlen, int size, __wsum *csum);
 int remove_and_copy_from_stable_buffer_no_wait(struct stable_buffer *stable_buffer, struct iovec *iov, int size);
+int is_stable_buffer_empty(struct stable_buffer *stable_buffer);
 int trim_stable_buffer_in_filters(void);
 int flush_send_buffer_in_filters(void);
 int dec_and_check_pending_send_on_send_buffer(struct send_buffer *send_buffer);
@@ -278,7 +279,7 @@ int send_zero_window_in_filters(void);
 //int ft_poll_secondary(struct pollfd __user *events);
 //int ft_poll_primary(struct pollfd __user *events, int nr_events);
 int ft_poll_after(struct pollfd __user *events, int *ret);
-int ft_poll_before(struct pollfd __user *events, int *ret);
+int ft_poll_before(struct pollfd __user *events, unsigned int nfds, int *ret);
 long ft_gettimeofday_primary(struct timeval __user * tv, struct timezone __user * tz);
 long ft_gettimeofday_secondary(struct timeval __user * tv, struct timezone __user * tz);
 long ft_time(time_t __user *tloc);

@@ -60,6 +60,7 @@ void process_crash_kernel_notification(struct work_struct *work){
 	unsigned long long time[7];
 	unsigned long long start_up,start_addr;
 	
+	trace_printk("\n");
 	//0=> func total time 
 	time[0]= cpu_clock(_cpu);
 
@@ -176,8 +177,9 @@ void process_crash_kernel_notification(struct work_struct *work){
 	addr= (unsigned int*) (ifr.ifr_addr.sa_data+offset);
 	*addr= inet_addr("10.1.1.48");
 
+	trace_printk("setting up ip\n");
 	sock->ops->ioctl(sock, SIOCSIFADDR, (long unsigned int)&ifr);	
-
+	trace_printk("ip set up called\n");
   
 	set_fs(fs); /* restore before returning to user space */	
 	
@@ -190,7 +192,7 @@ void process_crash_kernel_notification(struct work_struct *work){
         }*/
 
 	update_replica_type_after_failure();
-	//trace_printk("replica type updated\n");
+	trace_printk("replica type updated\n");
 
 	//5=> dummy driver down
         time[6]= cpu_clock(_cpu);
@@ -214,7 +216,7 @@ void process_crash_kernel_notification(struct work_struct *work){
 	//printk("dummy_driver down\n");
 
 	flush_syscall_info();
-	//trace_printk("syscall info updated\n");
+	trace_printk("syscall info updated\n");
 
 	time[0]= cpu_clock(_cpu)- time[0];
 	

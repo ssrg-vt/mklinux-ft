@@ -146,6 +146,9 @@ void inet_sock_destruct(struct sock *sk)
 	}
 	if (!sock_flag(sk, SOCK_DEAD)) {
 		pr_err("Attempt to release alive inet socket %p\n", sk);
+		if(sk->ft_filter){
+			trace_printk("port %d %d\n", ntohs(inet->inet_dport), inet->inet_dport);
+		}
 		return;
 	}
 

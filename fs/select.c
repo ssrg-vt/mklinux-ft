@@ -931,11 +931,11 @@ SYSCALL_DEFINE3(poll, struct pollfd __user *, ufds, unsigned int, nfds,
 
 #ifdef FT_POPCORN
 	/* Retrive epoll info from primary */
-	if(ft_poll_before(ufds, &ret)==FT_SYSCALL_DROP)
+	if(ft_poll_before(ufds, nfds, &ret)==FT_SYSCALL_DROP)
 		return ret;
 	/* For primary we disable the timeout */
 	if(ft_is_replicated(current) &&
-		ft_is_primary_replica(current)) {
+		(ft_is_primary_replica(current) || ft_is_primary_after_secondary_replica(current))) {
 		timeout_msecs = -1;
 	}
 #endif
