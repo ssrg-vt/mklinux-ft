@@ -238,8 +238,8 @@ long __det_start(struct task_struct *task)
 			spin_unlock_irqrestore(&ns->task_list_lock, flags);
 			break;
 		} else {
-			spin_unlock_irqrestore(&ns->task_list_lock, flags);
 			mb();
+			spin_unlock_irqrestore(&ns->task_list_lock, flags);
 		}
 		mb();
 		schedule();
@@ -257,6 +257,9 @@ long __det_start(struct task_struct *task)
 	ns->start_cost[task->pid % 64] += dtime;
 	spin_unlock(&(ns->tick_cost_lock));
 #endif
+
+	printk("pid %d ticks %d\n", task->pid, task->ft_det_tick);
+
 	return 1;
 }
 
@@ -279,6 +282,7 @@ asmlinkage long sys_popcorn_det_tick(long tick)
 		dtime = (uint64_t) ktime_get().tv64;
 #endif
 		update_tick(current, tick);
+		//printk("pid %d ticks %d\n", current->pid, current->ft_det_tick);
 #ifdef DET_PROF
 		dtime = (uint64_t) ktime_get().tv64 - dtime;
 		spin_lock(&(ns->tick_cost_lock));

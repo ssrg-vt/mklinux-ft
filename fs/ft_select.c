@@ -112,11 +112,12 @@ int ft_poll_primary_after_secondary_before(struct pollfd __user *events, unsigne
         struct poll_wait_info *pinfo = NULL;
 	int stb_data;
 
-	trace_printk("\n");
+	trace_printk("called\n");
 	
         pinfo = (struct poll_wait_info *) ft_get_pending_syscall_info(&current->ft_pid, current->id_syscall);
 
         if (!pinfo) {
+		trace_printk("no data from primary id syscall %d\n", current->id_syscall);
 		//threa migth be data on the stable buffer of the sockets
 		stb_data= check_if_read_data_available_from_stable_buffer(events, nfds);
 		if(stb_data){

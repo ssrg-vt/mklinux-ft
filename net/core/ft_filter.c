@@ -789,6 +789,7 @@ int flush_send_buffer(struct send_buffer *send_buffer, struct sock* sock){
 		if (len > INT_MAX)
 			len = INT_MAX;
 
+		trace_printk("sending %d bytes\n", len);
 		iov.iov_base = (void*) ( (char*) &entry->data + entry->to_consume_start);
 		iov.iov_len = len;
 		msg.msg_name = NULL;
@@ -2132,7 +2133,7 @@ void ft_deactivate_sk_after_time_wait_filter(struct inet_timewait_sock *tw){
         struct sock* sk= NULL;
 	if(tw->ft_filter){
 			spin_lock_bh(&tw->ft_filter->lock);
-			if(!ft_is_filter_primary(tw->ft_filter)){
+			if(ft_is_filter_secondary(tw->ft_filter)){
 				sk= tw->ft_filter->ft_sock;
 			}
 			tw->ft_filter->ft_sock= NULL;
@@ -6468,7 +6469,7 @@ int flush_send_buffer_in_filters(void){
 						 && filter->ft_sock->sk_state!=TCP_CLOSING){
 						
 						filter->send_buffer->flushed= 2;
-						trace_printk("flushing send buffer port %d", ntohs(filter->tcp_param.dport));
+						trace_printk("flushing send buffer port %d\n", ntohs(filter->tcp_param.dport));
 					       // spin_unlock_bh(&filter->lock);	
 						ret= flush_send_buffer(filter->send_buffer, filter->ft_sock);
 						if(ret){
@@ -6579,9 +6580,12 @@ int update_filter_type_after_failure(void){
 	if(!list_empty(&head_filter_to_put)){
 		list_for_each_safe(iter, n, &head_filter_to_put) {
 			new= list_entry(iter, struct list_filters, list_member);
-			if((new->filter->ft_sock->sk_state == TCP_LAST_ACK) || (new->filter->ft_sock->sk_state==TCP_CLOSING))
+			if((new->filter->ft_sock->sk_state == TCP_LAST_ACK) || (new->filter->ft_sock->sk_state==TCP_CLOSING)){
 				tcp_done(new->filter->ft_sock);
+				trace_printk("calling done port %d\n", ntohs(new->filter->tcp_param.dport));
+			}
 			put_ft_filter(new->filter);
+			trace_printk("calling put port %d\n", ntohs(new->filter->tcp_param.dport));
 			sock_put(new->filter->ft_sock);
 			list_del(&new->list_member);
 			kfree(new);

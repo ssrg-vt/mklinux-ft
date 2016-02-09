@@ -2635,9 +2635,9 @@ static int proc_pid_det_state(struct seq_file *m, struct pid_namespace *pidns,
 	list_for_each(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		if (ns->token != NULL && objPtr->task == ns->token->task)
-			seq_printf(m, "%d(%d)[%d][%d]<%d>[o] -> ", objPtr->task->pid, atomic_read(&objPtr->task->ft_det_tick), objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall);
+			seq_printf(m, "%d(%d)[%d][%d]<%d><%d>[o] -> ", objPtr->task->pid, atomic_read(&objPtr->task->ft_det_tick), objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall, objPtr->task->id_syscall);
 		else
-			seq_printf(m, "%d(%d)[%d][%d]<%d>[x] -> ", objPtr->task->pid, atomic_read(&objPtr->task->ft_det_tick), objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall);
+			seq_printf(m, "%d(%d)[%d][%d]<%d><%d>[x] -> ", objPtr->task->pid, atomic_read(&objPtr->task->ft_det_tick), objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall, objPtr->task->id_syscall);
 	}
 	seq_printf(m, "\n");
 	spin_unlock(&ns->task_list_lock);

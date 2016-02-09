@@ -958,9 +958,8 @@ long syscall_hook_enter(struct pt_regs *regs)
                     regs->orig_ax == __NR_listen)) {
 		//note sen and recv family are counted later on
 		//trace_printk("syscall %d\n", regs->orig_ax);
-                //printk("Syscall %d on %d\n", regs->orig_ax, current->pid);
                 current->id_syscall++;
-		
+		//printk("Syscall %d (sycall id %d) on pid %d tic %u\n", regs->orig_ax, current->id_syscall, current->pid, current->ft_det_tick);
         }
         return regs->orig_ax;
 }
