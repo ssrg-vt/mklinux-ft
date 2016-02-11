@@ -58,6 +58,11 @@ struct popcorn_namespace
 	int task_count;
 	/* The queue for storing wake up information from primary */
 	struct wake_up_buffer wake_up_buffer;
+	/* The shepherd */
+	struct task_struct *shepherd;
+	/* Tasks that are waiting for the token. */
+	int wait_count;
+	uint64_t shepherd_bump;
 #ifdef DET_PROF
 	uint64_t start_cost[64];
 	uint64_t tick_cost[64];
@@ -101,6 +106,9 @@ static inline void init_task_list(struct popcorn_namespace *ns)
 	ns->token = NULL;
 	ns->last_tick = 0;
 	ns->task_count = 0;
+	ns->wait_count = 0;
+	ns->shepherd = NULL;
+	ns->shepherd_bump = 0;
 	sema_init(&(ns->wake_up_buffer.queue_full), MAX_WAKE_UP_BUFFER);
 	sema_init(&(ns->wake_up_buffer.queue_empty), 0);
 	spin_lock_init(&(ns->wake_up_buffer.enqueue_lock));
@@ -156,6 +164,9 @@ static inline int add_task_to_ns(struct popcorn_namespace *ns, struct task_struc
 
 	task->ft_det_tick = 0;
 	new_task->task = task;
+	if (ns->shepherd != NULL && ns->shepherd->state == TASK_INTERRUPTIBLE) {
+		wake_up_process(ns->shepherd);
+	}
 	spin_lock_irqsave(&ns->task_list_lock, flags);
 	mb();
 	ns->task_count++;
@@ -228,6 +239,7 @@ static inline int update_token(struct popcorn_namespace *ns)
 				 objPtr->task->current_syscall == __NR_write ||
 				 objPtr->task->current_syscall == __NR_accept ||
 				 objPtr->task->current_syscall == __NR_time ||
+				 //objPtr->task->current_syscall == __NR_futex ||
 				 objPtr->task->current_syscall == __NR_poll ||
 				 objPtr->task->current_syscall == __NR_epoll_wait ||
 				 objPtr->task->current_syscall == __NR_gettimeofday ||
@@ -327,11 +339,11 @@ again:
 	if (ns->token != NULL && ns->token->task == task) {
 		if (is_det_active(ns, task)) {
 			retry++;
-			printk("WARNING: %d task which does not have the token is in state FT_DET_ACTIVE [%d](%d)\n", ns->token->task->pid, task->pid, retry);
+			trace_printk("WARNING: %d task which does not have the token is in state FT_DET_ACTIVE [%d](%d)\n", ns->token->task->pid, task->pid, retry);
 			if (retry < TOKEN_RETRY) {
 				goto again;
 			} else {
-				printk("[%d][%d] Critical token error\n", ns->token->task->pid, task->pid);
+				trace_printk("[%d][%d] Critical token error\n", ns->token->task->pid, task->pid);
 				return 1;
 			}
 		}

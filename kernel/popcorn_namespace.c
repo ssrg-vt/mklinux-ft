@@ -15,6 +15,8 @@
 #include <linux/spinlock.h>
 #include <linux/ft_replication.h>
 #include <linux/sched.h>
+#include <linux/delay.h>
+#include <linux/kthread.h>
 #include <asm/atomic.h>
 #include <asm/msr.h>
 #include <linux/time.h>
@@ -45,6 +47,7 @@ int is_popcorn_namespace_active(struct popcorn_namespace* ns){
 	return 0;
 }
 
+int det_shepherd(void *data);
 static struct popcorn_namespace *create_popcorn_namespace(struct popcorn_namespace *parent_ns)
 {
 	struct popcorn_namespace *ns;
@@ -58,6 +61,8 @@ static struct popcorn_namespace *create_popcorn_namespace(struct popcorn_namespa
 	init_task_list(ns);
 	//add_task_to_ns(ns, current);
 	//set_token(ns, current);
+	
+	ns->shepherd = kthread_run(det_shepherd, (void *)ns, "shepherd(%d)", current->pid);
 
         return ns;
 
@@ -84,7 +89,11 @@ struct popcorn_namespace *copy_pop_ns(unsigned long flags, struct popcorn_namesp
 
 static void destroy_popcorn_namespace(struct popcorn_namespace *ns)
 {
-        kmem_cache_free(popcorn_ns_cachep, ns);
+	// Also terminate the shepherd
+	if (ns->shepherd != NULL) {
+		kthread_stop(ns->shepherd);
+	}
+	kmem_cache_free(popcorn_ns_cachep, ns);
 }
 
 void free_popcorn_ns(struct kref *kref)
@@ -195,6 +204,77 @@ int write_notify_popcorn_ns(struct file *file, const char __user *buffer, unsign
 
 	return count;
 }
+
+// The shepherd thread
+// Each popcorn namespace should have one.
+// It ends until the namespace perishes
+int det_shepherd(void *data)
+{
+	struct popcorn_namespace *ns = (struct popcorn_namespace *) data;
+	struct task_list *token, *token2;
+	uint64_t tick, tick2;
+	uint64_t exp = 10;
+
+	while (!kthread_should_stop()) {
+		if (ns->task_count == 0) {
+			set_current_state(TASK_INTERRUPTIBLE);
+			schedule();
+			set_current_state(TASK_RUNNING);
+			continue;
+		}
+		udelay(10);
+		spin_lock(&ns->task_list_lock);
+		token = ns->token;
+		if (token == NULL ||
+				token->task == NULL) {
+			spin_unlock(&ns->task_list_lock);
+			continue;
+		}
+		tick = token->task->ft_det_tick;
+		spin_unlock(&ns->task_list_lock);
+		udelay(10);
+		spin_lock(&ns->task_list_lock);
+		token2 = ns->token;
+		if (token2 == NULL ||
+				token2->task == NULL) {
+			spin_unlock(&ns->task_list_lock);
+			continue;
+		}
+		tick2 = token2->task->ft_det_tick;
+		// Which means the token hasn't been changed during the delay
+		if (token == token2 && tick2 == tick) {
+			// And it is waiting for an event
+			if (token->task->state == TASK_INTERRUPTIBLE &&
+					(token->task->current_syscall == __NR_read ||
+				 token->task->current_syscall == __NR_sendto ||
+				 //token->task->current_syscall == __NR_futex ||
+				 token->task->current_syscall == __NR_sendmsg ||
+				 token->task->current_syscall == __NR_close ||
+				 token->task->current_syscall == __NR_recvfrom ||
+				 token->task->current_syscall == __NR_recvmsg ||
+				 token->task->current_syscall == __NR_write ||
+				 token->task->current_syscall == __NR_accept ||
+				 token->task->current_syscall == __NR_time ||
+				 token->task->current_syscall == __NR_poll ||
+				 token->task->current_syscall == __NR_epoll_wait ||
+				 token->task->current_syscall == __NR_gettimeofday ||
+				 token->task->current_syscall == __NR_bind ||
+				 token->task->current_syscall == __NR_wait4 ||
+				 token->task->current_syscall == __NR_nanosleep ||
+				 token->task->current_syscall == __NR_socket)) {
+				// Boom-sha-ka-la-ka bump the tick la
+				mb();
+				if (ns->wait_count != 0) {
+					ns->shepherd_bump ++;
+					token->task->ft_det_tick = ns->last_tick + 1;
+				}
+				update_token(ns);
+			}
+		}
+		spin_unlock(&ns->task_list_lock);
+	}
+}
+
 #ifdef DET_PROF
 __inline__ uint64_t perf_counter(struct timeval *tv)
 {
@@ -249,9 +329,9 @@ long __det_start(struct task_struct *task)
 #endif
 
 	for (;;) {
-		spin_lock_irqsave(&ns->task_list_lock, flags);
-		mb();
 		set_task_state(task, TASK_INTERRUPTIBLE);
+		mb();
+		spin_lock_irqsave(&ns->task_list_lock, flags);
 		if (have_token(task) || is_det_sched_disable(task)) {
 			mb();
 			set_task_state(task, TASK_RUNNING);
@@ -259,10 +339,15 @@ long __det_start(struct task_struct *task)
 			break;
 		} else {
 			mb();
+			ns->wait_count ++;
 			spin_unlock_irqrestore(&ns->task_list_lock, flags);
 		}
 		mb();
 		schedule();
+		spin_lock_irqsave(&ns->task_list_lock, flags);
+		mb();
+		ns->wait_count --;
+		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	}
 	//trace_printk("det f \n");
 	spin_lock_irqsave(&ns->task_list_lock, flags);
@@ -277,8 +362,6 @@ long __det_start(struct task_struct *task)
 	ns->start_cost[task->pid % 64] += dtime;
 	spin_unlock(&(ns->tick_cost_lock));
 #endif
-
-	//printk("pid %d ticks %d\n", task->pid, (int) task->ft_det_tick);
 
 	return 1;
 }

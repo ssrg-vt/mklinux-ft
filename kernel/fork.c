@@ -1271,6 +1271,7 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 #ifdef FT_POPCORN
 	if (is_popcorn(p)) {
 		p->ft_det_state = FT_DET_CREATED;
+		p->replica_type = 0x4848;
 #ifdef DETONLY
 		//p->replica_type = FT_INSIDE_NAMESPACE;
 #endif
