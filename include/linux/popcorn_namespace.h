@@ -207,7 +207,7 @@ static inline int update_token(struct popcorn_namespace *ns)
 	uint64_t tick_value = 0;
 	uint64_t min_value = ~0;
 
-	list_for_each(iter, &ns->ns_task_list.task_list_member) {
+	list_for_each_prev(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		tick_value = objPtr->task->ft_det_tick;
 		if (min_value >= tick_value) {
@@ -350,7 +350,7 @@ static inline int is_det_active(struct popcorn_namespace *ns, struct task_struct
 		if (objPtr->task->ft_det_state == FT_DET_ACTIVE) {
 			if ((task == NULL || objPtr->task != task) &&
 					!(objPtr->task->current_syscall == __NR_futex)) {
-				printk("(%d)[%d]%d holding token while (%d)[%d]%d asking for it\n", objPtr->task->pid, objPtr->task->current_syscall, objPtr->task->state, task->pid, task->current_syscall, task->state);
+				trace_printk("(%d)[%d]%d holding token while (%d)[%d]%d asking for it\n", objPtr->task->pid, objPtr->task->current_syscall, objPtr->task->state, task->pid, task->current_syscall, task->state);
 				// here I give you one moment to figure out the token
 				spin_unlock_irqrestore(&ns->task_list_lock, flags);
 				mdelay(2);
