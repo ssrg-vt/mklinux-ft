@@ -237,14 +237,14 @@ static inline int update_token(struct popcorn_namespace *ns)
 			}
 		}
 	}
-	/*
-	 *if (ns->token != NULL && ns->token->task != NULL && new_token != NULL && new_token->task != NULL)
-	 *    trace_printk("token from %d to %d\n", ns->token->task->pid, new_token->task->pid);
-	 *else if ((ns->token == NULL || ns->token->task == NULL) && (new_token != NULL && new_token->task != NULL))
-	 *    trace_printk("token from NULL to %d\n", new_token->task->pid);
-	 *else if ((ns->token == NULL || ns->token->task == NULL) && (new_token == NULL || new_token->task == NULL))
-	 *    trace_printk("token from NULL to NULL\n");
-	 */
+/*	
+	 if (ns->token != NULL && ns->token->task != NULL && new_token != NULL && new_token->task != NULL)
+	     trace_printk("token from %d to %d\n", ns->token->task->pid, new_token->task->pid);
+	 else if ((ns->token == NULL || ns->token->task == NULL) && (new_token != NULL && new_token->task != NULL))
+	     trace_printk("token from NULL to %d\n", new_token->task->pid);
+	 else if ((ns->token == NULL || ns->token->task == NULL) && (new_token == NULL || new_token->task == NULL))
+	     trace_printk("token from NULL to NULL\n");
+*/	 
 	mb();
 	
 	ns->token = new_token;
@@ -293,7 +293,7 @@ static inline void det_wake_up(struct task_struct *task)
 	mb();
 
 	if (ns->last_tick > task->ft_det_tick) {
-		task->ft_det_tick = ns->last_tick;
+	//	task->ft_det_tick = ns->last_tick;
 	}
 	mb();
 	update_token(ns);
@@ -349,7 +349,7 @@ static inline int is_det_active(struct popcorn_namespace *ns, struct task_struct
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		if (objPtr->task->ft_det_state == FT_DET_ACTIVE) {
 			if ((task == NULL || objPtr->task != task) &&
-					!(objPtr->task->current_syscall == __NR_futex)) {
+					(objPtr->task->state == TASK_RUNNING)) {
 				trace_printk("(%d)[%d]%d holding token while (%d)[%d]%d asking for it\n", objPtr->task->pid, objPtr->task->current_syscall, objPtr->task->state, task->pid, task->current_syscall, task->state);
 				// here I give you one moment to figure out the token
 				spin_unlock_irqrestore(&ns->task_list_lock, flags);
