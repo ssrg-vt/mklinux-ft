@@ -216,7 +216,8 @@ int det_shepherd(void *data)
 	uint64_t exp = 10;
 
 	while (!kthread_should_stop()) {
-		if (ns->task_count == 0) {
+		if (ns->task_count == 0 ||
+				ns->wait_count == 0) {
 			set_current_state(TASK_INTERRUPTIBLE);
 			schedule();
 			set_current_state(TASK_RUNNING);
@@ -254,13 +255,9 @@ int det_shepherd(void *data)
 				 token->task->current_syscall == __NR_recvmsg ||
 				 token->task->current_syscall == __NR_write ||
 				 token->task->current_syscall == __NR_accept ||
-				 token->task->current_syscall == __NR_time ||
 				 token->task->current_syscall == __NR_poll ||
 				 token->task->current_syscall == __NR_epoll_wait ||
-				 token->task->current_syscall == __NR_gettimeofday ||
-				 token->task->current_syscall == __NR_bind ||
 				 token->task->current_syscall == __NR_wait4 ||
-				 token->task->current_syscall == __NR_nanosleep ||
 				 token->task->current_syscall == __NR_socket)) {
 				// Boom-sha-ka-la-ka bump the tick la
 				mb();
@@ -341,6 +338,7 @@ long __det_start(struct task_struct *task)
 			mb();
 			ns->wait_count ++;
 			spin_unlock_irqrestore(&ns->task_list_lock, flags);
+			wake_up_process(ns->shepherd);
 		}
 		mb();
 		schedule();
@@ -348,6 +346,7 @@ long __det_start(struct task_struct *task)
 		mb();
 		ns->wait_count --;
 		spin_unlock_irqrestore(&ns->task_list_lock, flags);
+		wake_up_process(ns->shepherd);
 	}
 	//trace_printk("det f \n");
 	spin_lock_irqsave(&ns->task_list_lock, flags);

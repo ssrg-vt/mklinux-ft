@@ -1773,6 +1773,7 @@ static void futex_wait_queue_me(struct futex_hash_bucket *hb, struct futex_q *q,
 	if (is_popcorn(current)) {
 		ns = current->nsproxy->pop_ns;
 		spin_lock(&ns->task_list_lock);
+		current->ft_det_state = FT_DET_INACTIVE;
 		mb();
 		update_token(ns);
 		mb();

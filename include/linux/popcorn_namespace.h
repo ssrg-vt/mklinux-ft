@@ -309,9 +309,11 @@ static inline void det_wake_up(struct task_struct *task)
 	spin_lock_irqsave(&ns->task_list_lock, flags);
 	mb();
 
-	if (ns->last_tick > task->ft_det_tick) {
-	//	task->ft_det_tick = ns->last_tick;
-	}
+	/*
+	 *if (ns->last_tick > task->ft_det_tick) {
+	 *    task->ft_det_tick = ns->last_tick;
+	 *}
+	 */
 	mb();
 	update_token(ns);
 	mb();
@@ -337,16 +339,6 @@ again:
 	update_token(ns);
 	mb();
 	if (ns->token != NULL && ns->token->task == task) {
-		if (is_det_active(ns, task)) {
-			retry++;
-			trace_printk("WARNING: %d task which does not have the token is in state FT_DET_ACTIVE [%d](%d)\n", ns->token->task->pid, task->pid, retry);
-			if (retry < TOKEN_RETRY) {
-				goto again;
-			} else {
-				trace_printk("[%d][%d] Critical token error\n", ns->token->task->pid, task->pid);
-				return 1;
-			}
-		}
 		return 1;
 	} else {
 		return 0;
