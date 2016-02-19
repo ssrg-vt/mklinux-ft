@@ -297,7 +297,19 @@ int dmesg_restrict;
 #endif
 
 void print_log_buf_info(){
-	printk("%s: LOG_BUF address: %p len: %d\n", __func__, log_buf, log_buf_len);
+	printk("%s: LOG_BUF address: %p phi add %pa len: %d\n", __func__, log_buf, virt_to_phys(log_buf), log_buf_len);
+}
+
+resource_size_t get_dmesg_log_buf_phy(void){
+	return virt_to_phys(log_buf);
+}
+
+int get_dmesg_size(void){
+	return  log_buf_len;
+}
+
+unsigned long get_pfn_dmesg(void){
+	return __page_to_pfn(virt_to_page(log_buf));
 }
 
 static int syslog_action_restricted(int type)

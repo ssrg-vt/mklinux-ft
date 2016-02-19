@@ -17,6 +17,7 @@
 #include <asm/uaccess.h>
 #include <linux/list.h>
 #include <linux/ft_replication.h>
+#include <linux/popcorn_namespace.h>
 #include <linux/net.h>
 #include <net/sock.h>
 
@@ -86,6 +87,7 @@ static int check_if_read_data_available_from_stable_buffer(struct pollfd __user 
 			sock= sockfd_lookup(pollentry.fd, &err);
 			if (sock) {
 				if(sock->sk && sock->sk->ft_filter){
+					trace_printk("pollin on port %d\n",ntohs(sock->sk->ft_filter->tcp_param.dport));
 					if(!is_stable_buffer_empty(sock->sk->ft_filter->stable_buffer)){
 						ret++;
 						trace_printk("stable buffer not empty port %d\n", ntohs(sock->sk->ft_filter->tcp_param.dport));
@@ -117,6 +119,7 @@ int ft_poll_primary_after_secondary_before(struct pollfd __user *events, unsigne
         pinfo = (struct poll_wait_info *) ft_get_pending_syscall_info(&current->ft_pid, current->id_syscall);
 
         if (!pinfo) {
+		disable_det_sched(current);
 		trace_printk("no data from primary id syscall %d\n", current->id_syscall);
 		//threa migth be data on the stable buffer of the sockets
 		stb_data= check_if_read_data_available_from_stable_buffer(events, nfds);

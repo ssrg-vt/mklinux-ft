@@ -935,7 +935,7 @@ SYSCALL_DEFINE3(poll, struct pollfd __user *, ufds, unsigned int, nfds,
 		return ret;
 	/* For primary we disable the timeout */
 	if(ft_is_replicated(current) &&
-		(ft_is_primary_replica(current) || ft_is_primary_after_secondary_replica(current))) {
+		(ft_is_primary_replica(current) || ft_is_primary_after_secondary_replica(current)) && !is_det_sched_disable(current) ) {
 		timeout_msecs = -1;
 	}
 #endif

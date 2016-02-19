@@ -202,16 +202,36 @@ __inline__ uint64_t perf_counter(struct timeval *tv)
 }
 #endif
 
+int is_det_sched_disable(struct task_struct *task){
+	return (task->ft_popcorn && task->ft_popcorn->disable_det_sched==1);
+}
+
+void disable_det_sched(struct task_struct *task){
+	struct task_list *objPtr;
+	struct popcorn_namespace *ns;
+	struct list_head *iter= NULL;
+
+	if(task->ft_popcorn && task->ft_popcorn->disable_det_sched==0 && !is_there_any_secondary_replica(task->ft_popcorn)){
+		task->ft_popcorn->disable_det_sched= 1;
+		
+		//wake up all threads after disabling det sched
+		ns = task->nsproxy->pop_ns;
+        	list_for_each_prev(iter, &ns->ns_task_list.task_list_member) {
+                	objPtr = list_entry(iter, struct task_list, task_list_member);
+                	wake_up_process(objPtr->task);	
+		}
+	}
+}
+
 long __det_start(struct task_struct *task)
 {
 	struct popcorn_namespace *ns;
-	unsigned long flags;
-	int i;
+	unsigned long flags= 0;
 #ifdef DET_PROF
 	uint64_t dtime;
 #endif
 
-	if(!is_popcorn(task)) {
+	if(!is_popcorn(task) || is_det_sched_disable(task)) {
 		return 0;
 	}
 
@@ -232,7 +252,7 @@ long __det_start(struct task_struct *task)
 		spin_lock_irqsave(&ns->task_list_lock, flags);
 		mb();
 		set_task_state(task, TASK_INTERRUPTIBLE);
-		if (have_token(task)) {
+		if (have_token(task) || is_det_sched_disable(task)) {
 			mb();
 			set_task_state(task, TASK_RUNNING);
 			spin_unlock_irqrestore(&ns->task_list_lock, flags);
@@ -258,19 +278,18 @@ long __det_start(struct task_struct *task)
 	spin_unlock(&(ns->tick_cost_lock));
 #endif
 
-	printk("pid %d ticks %d\n", task->pid, task->ft_det_tick);
+	printk("pid %d ticks %d\n", task->pid, (int) task->ft_det_tick);
 
 	return 1;
 }
 
 asmlinkage long sys_popcorn_det_start(void)
 {
-	__det_start(current);
+	return __det_start(current);
 }
 
 asmlinkage long sys_popcorn_det_tick(long tick)
 {
-	struct popcorn_namespace *ns;
 #ifdef DET_PROF
 	uint64_t dtime;
 	ns = current->nsproxy->pop_ns;
@@ -299,7 +318,7 @@ asmlinkage long sys_popcorn_det_tick(long tick)
 long __det_end(struct task_struct *task)
 {
 	struct popcorn_namespace *ns;
-	unsigned long flags;
+	unsigned long flags= 0;
 #ifdef DET_PROF
 	uint64_t dtime;
 #endif

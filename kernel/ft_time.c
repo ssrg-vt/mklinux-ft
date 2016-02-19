@@ -5,6 +5,7 @@
  */
 
 #include <linux/ft_replication.h>
+#include <linux/popcorn_namespace.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/pcn_kmsg.h>
@@ -71,7 +72,8 @@ static long ft_gettimeofday_primary_after_secondary(struct timeval __user * tv, 
         primary_info= (struct get_time_info *)ft_get_pending_syscall_info(&current->ft_pid, current->id_syscall);
 
         if(!primary_info){
-                return ft_gettimeofday_primary(tv, tz);
+                disable_det_sched(current);
+		return ft_gettimeofday_primary(tv, tz);
         }
 
 	if (likely(tv != NULL)) {
@@ -170,7 +172,7 @@ long ft_time_primary(time_t __user *tloc)
 		timeinfo = kmalloc(sizeof(struct time_info), GFP_KERNEL);
         	memcpy(&timeinfo->tloc, &i, sizeof(i));
         	timeinfo->ret = i;
-		ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, timeinfo, sizeof(struct time_info));
+		ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) timeinfo, sizeof(struct time_info));
 		kfree(timeinfo);
 		FTPRINTK("sending time for syscall %d - %d - %d\n", current->id_syscall, current->pid, ret);
 	}
@@ -192,7 +194,8 @@ long ft_time_primary_after_secondary(time_t __user *tloc)
 		return ret;
         }
         else{
-        	return ft_time_primary(tloc);
+        	disable_det_sched(current);
+		return ft_time_primary(tloc);
 	}
 
 }

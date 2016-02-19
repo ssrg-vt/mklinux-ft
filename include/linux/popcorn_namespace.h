@@ -33,6 +33,8 @@ int is_popcorn_namespace_active(struct popcorn_namespace* ns);
 static inline int update_token(struct popcorn_namespace *ns);
 long __det_start(struct task_struct *task);
 long __det_end(struct task_struct *task);
+int is_det_sched_disable(struct task_struct *task);
+void disable_det_sched(struct task_struct *task);
 
 struct task_list {
 	struct list_head task_list_member;
@@ -74,9 +76,9 @@ static inline void dump_task_list(struct popcorn_namespace *ns)
 	list_for_each(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		if (ns->token != NULL && objPtr->task == ns->token->task)
-			printk("%d(%d)[%ld][%d]<%ld>[o] -> ", objPtr->task->pid, objPtr->task->ft_det_tick, objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall);
+			printk("%d(%d)[%ld][%d]<%ld>[o] -> ", objPtr->task->pid, (int) objPtr->task->ft_det_tick, (long int) objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall);
 		else
-			printk("%d(%d)[%ld][%d]<%ld>[x] -> ", objPtr->task->pid, objPtr->task->ft_det_tick, objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall);
+			printk("%d(%d)[%ld][%d]<%ld>[x] -> ", objPtr->task->pid, (int) objPtr->task->ft_det_tick, (long int) objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall);
 	}
 	printk("\n");
 	spin_unlock(&ns->task_list_lock);
@@ -207,6 +209,9 @@ static inline int update_token(struct popcorn_namespace *ns)
 	uint64_t tick_value = 0;
 	uint64_t min_value = ~0;
 
+	if(is_det_sched_disable(current))
+                return 0;
+
 	list_for_each_prev(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		tick_value = objPtr->task->ft_det_tick;
@@ -309,7 +314,6 @@ static inline int is_det_active(struct popcorn_namespace *ns, struct task_struct
 
 static inline int have_token(struct task_struct *task)
 {
-	unsigned long flags;
 	int retry = 0;
 	struct popcorn_namespace *ns;
 
@@ -343,14 +347,14 @@ static inline int is_det_active(struct popcorn_namespace *ns, struct task_struct
 {
 	struct list_head *iter= NULL;
 	struct task_list *objPtr;
-	unsigned long flags;
+	unsigned long flags= 0;
 
 	list_for_each(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		if (objPtr->task->ft_det_state == FT_DET_ACTIVE) {
 			if ((task == NULL || objPtr->task != task) &&
 					(objPtr->task->state == TASK_RUNNING)) {
-				trace_printk("(%d)[%d]%d holding token while (%d)[%d]%d asking for it\n", objPtr->task->pid, objPtr->task->current_syscall, objPtr->task->state, task->pid, task->current_syscall, task->state);
+				trace_printk("(%d)[%ld]%ld holding token while (%d)[%ld]%ld asking for it\n", (int)objPtr->task->pid, objPtr->task->current_syscall, objPtr->task->state, (int) task->pid, task->current_syscall, task->state);
 				// here I give you one moment to figure out the token
 				spin_unlock_irqrestore(&ns->task_list_lock, flags);
 				mdelay(2);

@@ -290,6 +290,7 @@ static struct ft_pop_rep* create_ft_pop_rep(int replication_degree, int new_id, 
                 new_ft_pop->id.kernel = id->kernel;
 	}
 	new_ft_pop->replication_degree= replication_degree;
+	new_ft_pop->disable_det_sched= 0;
 
 	INIT_LIST_HEAD(&new_ft_pop->secondary_replicas_head.replica_list_member);
 	
@@ -347,7 +348,7 @@ cwd_again:
 	}
 	get_fs_pwd(current->fs, &pwd_path);
 	ret_cwd = d_path(&pwd_path, cwd, max_path_size);
-	printk("cwd %s %d\n", cwd, ret_cwd);
+	printk("cwd %s %lu\n", cwd, (unsigned long)ret_cwd);
 	if(IS_ERR(ret_cwd)){
 		kfree(cwd);
 		if(ret_cwd == ERR_PTR(-ENAMETOOLONG)){
@@ -847,6 +848,7 @@ int copy_replication(unsigned long flags, struct task_struct *tsk){
 	struct popcorn_namespace *pop;
 	struct task_struct* ancestor;
 	int ret= 0;
+	char *my_ft_pid;
 
 	pop= tsk->nsproxy->pop_ns;
 	if(is_popcorn_namespace_active(pop)){
@@ -948,7 +950,7 @@ int copy_replication(unsigned long flags, struct task_struct *tsk){
 			tsk->id_syscall= 0;
 			tsk->useful= NULL;
 
-			char *my_ft_pid= print_ft_pid(&tsk->ft_pid);
+			my_ft_pid= print_ft_pid(&tsk->ft_pid);
 			printk("pid %d is %s\n", tsk->pid, my_ft_pid );
 			kfree(my_ft_pid);
 		}

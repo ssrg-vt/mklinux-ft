@@ -685,6 +685,7 @@ static int ft_wake_up_primary_after_secondary(void){
 	int ret= 0, i;
 	list_entry_t *head, *app;
 	struct wait_syscall* wait_info;
+	int pending_syscalls= 0, woken_up=0;
 
 	spin_lock(&syscall_hash->spinlock);
         
@@ -697,14 +698,20 @@ static int ft_wake_up_primary_after_secondary(void){
 					printk("ERROR: %s no obj field\n", __func__);
 					goto out;
 				}
+				pending_syscalls++;
 				wait_info= (struct wait_syscall*) app->obj;
 				if(wait_info->task && ft_is_primary_after_secondary_replica(wait_info->task)){
+					woken_up++;
 					wait_info->populated= 1;
 					wake_up_process(wait_info->task);
 				}
 			}
 		}
 	}
+
+	trace_printk("pending syscalls %d of which woken up %d\n", pending_syscalls, woken_up);
+	printk("pending syscalls %d of which woken up %d\n", pending_syscalls, woken_up);
+
 
 out:        
 	spin_unlock(&syscall_hash->spinlock);
@@ -957,10 +964,15 @@ long syscall_hook_enter(struct pt_regs *regs)
                     regs->orig_ax == __NR_bind ||
                     regs->orig_ax == __NR_listen)) {
 		//note sen and recv family are counted later on
-		//trace_printk("syscall %d\n", regs->orig_ax);
+	//	trace_printk("syscall %d\n", regs->orig_ax);
                 current->id_syscall++;
-		//printk("Syscall %d (sycall id %d) on pid %d tic %u\n", regs->orig_ax, current->id_syscall, current->pid, current->ft_det_tick);
+		printk("Syscall %d (sycall id %d) on pid %d tic %u\n", regs->orig_ax, current->id_syscall, current->pid, current->ft_det_tick);
         }
+
+	/*if(ft_is_replicated(current))
+		trace_printk("Syscall %d (sycall id %d) on pid %d tic %u\n", regs->orig_ax, current->id_syscall, current->pid, current->ft_det_tick);
+	*/
+
         return regs->orig_ax;
 }
 

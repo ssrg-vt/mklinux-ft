@@ -119,6 +119,7 @@ struct ft_pop_rep{
 	struct kref kref;
 	struct ft_pop_rep_id id;
 	int replication_degree;
+	int disable_det_sched;
 	struct replica_id primary_replica;
 	struct replica_id_list secondary_replicas_head;
 };

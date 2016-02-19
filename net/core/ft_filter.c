@@ -201,6 +201,7 @@ struct handshake_work{
         long long ack_pckt_id;
         __u32 ack_seq;
 	int completed;
+	struct task_struct *dispatcher_thread;
 	u64 time;
 };
 
@@ -1567,7 +1568,7 @@ static void release_filter(struct kref *kref){
 #endif
                 filter_printed= print_filter_id(filter);
                 
-		//trace_printk("deleting %s filter %s pckt rcv %lld pckt snt %lld\n", (filter->type & FT_FILTER_FAKE)?"fake":"", filter_printed, filter->local_rx, filter->local_tx);
+		trace_printk("deleting %s filter %s pckt rcv %lld pckt snt %lld\n", (filter->type & FT_FILTER_FAKE)?"fake":"", filter_printed, filter->local_rx, filter->local_tx);
 		if(filter_printed)
                         kfree(filter_printed);
 
@@ -2645,10 +2646,10 @@ static unsigned int ft_hook_after_network_layer_primary_tcp(struct net_filter_in
      * this value in id.
      * To hide the failure of the primary, set id to 0 always.
      */
-    iph = ip_hdr(skb);
+    /*iph = ip_hdr(skb);
 
     iph->id= 0;
-    ip_send_check(iph);
+    ip_send_check(iph);*/
 
 #if FT_FILTER_VERBOSE
     ft_pid_printed= print_ft_pid(&current->ft_pid);
@@ -2989,7 +2990,9 @@ static void dispatch_handshake_msg(struct work_struct* work){
 
 inject_syn:
 	local_bh_disable();
+	my_work->dispatcher_thread= current;
         ret= netif_receive_skb(skb);
+	my_work->dispatcher_thread= NULL;
         local_bh_enable();
 	
 	if(ret==NET_RX_DROP){
@@ -3089,7 +3092,9 @@ check_syn:
 
 inject_ack:
 	local_bh_disable();
+	my_work->dispatcher_thread= current;
         ret= netif_receive_skb(skb);
+        my_work->dispatcher_thread= NULL;
         local_bh_enable();
 
 	if(ret==NET_RX_DROP){
@@ -4172,7 +4177,7 @@ again:  filter= find_and_get_filter(&msg->creator, msg->filter_id, msg->is_child
 			}
 		}
 		else{
-			printk("ERROR: %s no filter for pckt id %d port %d\n", __func__, msg->pckt_id, ntohs(filter->tcp_param.dport));
+			printk("ERROR: %s no filter for pckt id %d port %d\n", __func__, msg->pckt_id, ntohs(msg->dport));
 			pcn_kmsg_free_msg(msg);
 		}
         }
@@ -5487,7 +5492,7 @@ unsigned int ft_hook_before_tcp_primary_after_secondary(struct sk_buff *skb, str
 		ret= NF_ACCEPT;
         	if(hand_work){
                 	spin_lock_bh(&hand_work->lock);
-                	if(hand_work->completed){
+                	if(hand_work->completed && hand_work->dispatcher_thread!=current){
 				trace_printk("dropping\n");
 				ret= NF_DROP;
 			}
@@ -5917,7 +5922,7 @@ unsigned int ft_hook_before_tcp_secondary(struct sk_buff *skb, struct net_filter
 		//NOTE send buffer has been initialized with primary seq, so it is safe to not apply any delta to the used ack.
 		remove_from_send_buffer(filter->send_buffer, TCP_SKB_CB(skb)->ack_seq);
 
-		//trace_printk("%s letting pckt transiting on status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", __func__, filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
+		trace_printk("%s letting pckt transiting on status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", __func__, filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
 
 		/* save the packet in the stable buffer only if there is actual payload*/
 		if(size && !(size==1 && tcp_header->fin) ){
@@ -6001,7 +6006,7 @@ unsigned int ft_hook_before_tcp_secondary(struct sk_buff *skb, struct net_filter
 		 tcp_header->check = 0;
 		 tcp_header->check= checksum_tcp_rx(skb, skb->len, iph, tcp_header);
 
-		 //trace_printk("fin status %i fin %d ack %d seq %u ack seq %u tp rcv next %u  tp send next %u port %i\n", sk->sk_state, tcp_header->fin, tcp_header->ack, ntohl(tcp_header->seq), ntohl(tcp_header->ack_seq), tcp_sk(sk)->rcv_nxt,  tcp_sk(sk)->snd_nxt, ntohs(tcp_header->source));
+		 trace_printk("fin status %i fin %d ack %d seq %u ack seq %u tp rcv next %u  tp send next %u port %i\n", sk->sk_state, tcp_header->fin, tcp_header->ack, ntohl(tcp_header->seq), ntohl(tcp_header->ack_seq), tcp_sk(sk)->rcv_nxt,  tcp_sk(sk)->snd_nxt, ntohs(tcp_header->source));
 
 		 return NF_ACCEPT;
 		}
