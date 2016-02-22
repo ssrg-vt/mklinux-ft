@@ -1494,13 +1494,14 @@ struct pci_dev *__ref pci_scan_single_device(struct pci_bus *bus, int devfn)
 		return NULL;
 
 	if (pci_device_blacklisted(dev)) {
-		printk(KERN_INFO "%s: [%x,%x] [%d,%d] device blacklisted (%d, %d)\n", __func__,
+		/*printk(KERN_INFO "%s: [%x,%x] [%d,%d] device blacklisted (%d, %d)\n", __func__,
 				dev->vendor, dev->device, PCI_SLOT(dev->devfn),PCI_FUNC(dev->devfn), devfn, dev->devfn);
+		*/
 		return dev;
 	}
-	printk(KERN_INFO "%s: [%x,%x] [%d,%d] device load (%d, %d)\n", __func__,
+	/*printk(KERN_INFO "%s: [%x,%x] [%d,%d] device load (%d, %d)\n", __func__,
                          dev->vendor, dev->device, PCI_SLOT(dev->devfn),PCI_FUNC(dev->devfn), devfn, dev->devfn);
-
+	*/
 	pci_device_add(dev, bus);
 
 	return dev;

@@ -966,7 +966,7 @@ long syscall_hook_enter(struct pt_regs *regs)
 		//note sen and recv family are counted later on
 	//	trace_printk("syscall %d\n", regs->orig_ax);
                 current->id_syscall++;
-		printk("Syscall %d (sycall id %d) on pid %d tic %u\n", regs->orig_ax, current->id_syscall, current->pid, current->ft_det_tick);
+		//printk("Syscall %d (sycall id %d) on pid %d tic %u\n", regs->orig_ax, current->id_syscall, current->pid, current->ft_det_tick);
         }
 
 	/*if(ft_is_replicated(current))

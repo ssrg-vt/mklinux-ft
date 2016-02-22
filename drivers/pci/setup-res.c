@@ -85,9 +85,9 @@ void pci_update_resource(struct pci_dev *dev, int resno)
 		}
 	}
 	res->flags &= ~IORESOURCE_UNSET;
-	dev_info(&dev->dev, "BAR %d: set to %pR (PCI address [%#llx-%#llx])\n",
+	/*dev_info(&dev->dev, "BAR %d: set to %pR (PCI address [%#llx-%#llx])\n",
 		 resno, res, (unsigned long long)region.start,
-		 (unsigned long long)region.end);
+		 (unsigned long long)region.end);*/
 }
 
 int pci_claim_resource(struct pci_dev *dev, int resource)
@@ -212,9 +212,9 @@ static int _pci_assign_resource(struct pci_dev *dev, int resno, int size, resour
 			type = "io";
 		else
 			type = "unknown";
-		dev_info(&dev->dev,
+		/*dev_info(&dev->dev,
 			 "BAR %d: can't assign %s (size %#llx)\n",
-			 resno, type, (unsigned long long) resource_size(res));
+			 resno, type, (unsigned long long) resource_size(res));*/
 	}
 
 	return ret;
@@ -237,7 +237,7 @@ int pci_reassign_resource(struct pci_dev *dev, int resno, resource_size_t addsiz
 	ret = _pci_assign_resource(dev, resno, new_size, min_align);
 	if (!ret) {
 		res->flags &= ~IORESOURCE_STARTALIGN;
-		dev_info(&dev->dev, "BAR %d: assigned %pR\n", resno, res);
+		//dev_info(&dev->dev, "BAR %d: assigned %pR\n", resno, res);
 		if (resno < PCI_BRIDGE_RESOURCES)
 			pci_update_resource(dev, resno);
 	}
@@ -272,7 +272,7 @@ int pci_assign_resource(struct pci_dev *dev, int resno)
 
 	if (!ret) {
 		res->flags &= ~IORESOURCE_STARTALIGN;
-		dev_info(&dev->dev, "BAR %d: assigned %pR\n", resno, res);
+		//dev_info(&dev->dev, "BAR %d: assigned %pR\n", resno, res);
 		if (resno < PCI_BRIDGE_RESOURCES)
 			pci_update_resource(dev, resno);
 	}

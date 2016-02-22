@@ -278,7 +278,7 @@ long __det_start(struct task_struct *task)
 	spin_unlock(&(ns->tick_cost_lock));
 #endif
 
-	printk("pid %d ticks %d\n", task->pid, (int) task->ft_det_tick);
+	//printk("pid %d ticks %d\n", task->pid, (int) task->ft_det_tick);
 
 	return 1;
 }

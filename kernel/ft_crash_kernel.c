@@ -20,9 +20,6 @@
 
 struct crash_kernel_notification_msg{
         struct pcn_kmsg_hdr header;
-	resource_size_t dmesg_buf_phys_addr;
-	int dmesg_size;
-	unsigned long dmesg_pfn;
 };
 
 struct workqueue_struct *crash_wq;
@@ -31,219 +28,11 @@ extern int _cpu;
 extern int pci_dev_list_remove(int compatible, char *vendor, char *model,
                char* slot, char *strflags, int flags);
 
-struct dentry  *file1;
-resource_size_t primary_dmesg_buf_phys_addr;
-int primary_dmesg_size;
-unsigned long primary_dmesg_pfn;
+static int swithching_device= 0;
 
-struct mmap_info {
-	char *data;	/* the data */
-	int reference;       /* how many times it is mmapped */  	
-};
-
-
-/* keep track of how many times it is mmapped */
-
-void mmap_open(struct vm_area_struct *vma)
-{
-	struct mmap_info *info = (struct mmap_info *)vma->vm_private_data;
-	if(!info){
-		printk("%s WARINIG no mmap_info\n", __func__);
-		return;
-	}
-	info->reference++;
-	printk("%s reference %d\n", __func__,info->reference );
+int is_switching_device(void){
+	return swithching_device==1;
 }
-
-void mmap_close(struct vm_area_struct *vma)
-{
-	struct mmap_info *info = (struct mmap_info *)vma->vm_private_data;
-	if(!info){
-                printk("%s WARINIG no mmap_info\n", __func__);
-                return;
-        }
-
-	info->reference--;
-	printk("%s reference %d\n", __func__,info->reference );
-}
-
-/* nopage is called the first time a memory area is accessed which is not in memory,
- * it does the actual mapping between kernel and user space memory
- */
-struct page *mmap_nopage(struct vm_area_struct *vma, unsigned long address, int *type)
-{
-	struct page *page;
-	struct mmap_info *info;
-	/* is the address valid? */
-	if (address > vma->vm_end) {
-		printk("invalid address\n");
-		return NULL;
-	}
-	/* the data is in vma->vm_private_data */
-	info = (struct mmap_info *)vma->vm_private_data;
-	if (!info->data) {
-		printk("no data\n");
-		return NULL;	
-	}
-
-	/* get the page */
-	page = virt_to_page(info->data);
-	
-	/* increment the reference count of this page */
-	get_page(page);
-	/* type is the page fault type */
-	if (type)
-		*type = VM_FAULT_MINOR;
-
-	return page;
-}
-
-int mmap_fault(struct vm_area_struct *vma, struct vm_fault *vmf){
-	unsigned long address= (unsigned long)vmf->virtual_address;
-	struct page *page;	
-	struct mmap_info *info;
-
-	printk("%s starting ...\n", __func__);
-
-	if(!vma || !vmf){
-		printk("%s invalid parameters\n", __func__);
-		return VM_FAULT_SIGBUS;
-	}
-
-	if(address > vma->vm_end || address < vma->vm_start) {
-                printk("%s invalid address\n", __func__);
-                return VM_FAULT_SIGBUS;
-        }
-
-	/* the data is in vma->vm_private_data */
-        info = (struct mmap_info *)vma->vm_private_data;
-        if (!info || !info->data) {
-                printk("%s no data\n", __func__);    
-                return VM_FAULT_SIGBUS;            
-        }
-
-	printk("%s info is at: va %p phy_addr %pa\n", __func__, info->data,  virt_to_phys(info->data));
-	
-	 /* get the page */              
-        page = virt_to_page(info->data + (vmf->pgoff*PAGE_SIZE));
-        
-        /* increment the reference count of this page */
-        get_page(page);
-          
-        vmf->page= page;
-
-	return 0;
-
-
-}
-
-struct vm_operations_struct mmap_vm_ops = {
-	.open =     mmap_open,
-	.close =    mmap_close,
-	//.nopage =   mmap_nopage,
-	.fault= mmap_fault,
-};
-
-int my_mmap(struct file *filp, struct vm_area_struct *vma){
-	vma->vm_ops = &mmap_vm_ops;
-	vma->vm_flags |= VM_RESERVED;
-	/* assign the file private data to the vm private data */
-	printk("%s: mapping vma\n", __func__);
-	vma->vm_private_data = filp->private_data;
-	mmap_open(vma);
-	return 0;
-}
-
-int my_close(struct inode *inode, struct file *filp)
-{
-	struct mmap_info *info = filp->private_data;
-	if(!info){
-		printk("WARNING no mmap_info\n");
-		return 0;
-	}
-
-	iounmap(info->data);
-    	kfree(info);
-	filp->private_data = NULL;
-	return 0;
-}
-
-int my_open(struct inode *inode, struct file *filp)
-{	
-	unsigned long size= primary_dmesg_size;
-	struct mmap_info *info;
-	char * primary_dmesg; 
-
-	info = kmalloc(sizeof(struct mmap_info), GFP_KERNEL);
-	if(!info)
-		return -ENOMEM;
-
-	//address gnd size got from dmesg at boot time of primary
-	primary_dmesg= ioremap_cache(primary_dmesg_buf_phys_addr, primary_dmesg_size);
-  	//primary_dmesg= kmalloc(size, GFP_KERNEL);
-	if(!primary_dmesg)
-                return -ENOMEM;
-
-	printk("%s: ioremap successfull va %p phy_addr %pa.    primary_dmesg_buf_phys_addr %pa primary_dmesg_buf_phys_addr aligned %pa primary_dmesg_size %d size %lu\n", __func__, primary_dmesg,  virt_to_phys(primary_dmesg), primary_dmesg_buf_phys_addr, primary_dmesg_buf_phys_addr&PAGE_MASK, primary_dmesg_size, size);
-
-	iounmap(primary_dmesg);
-	
-	primary_dmesg= ioremap_cache(primary_dmesg_buf_phys_addr&PAGE_MASK, primary_dmesg_size);
-        //primary_dmesg= kmalloc(size, GFP_KERNEL);
-        if(!primary_dmesg)
-                return -ENOMEM;
-
-        printk("%s: ioremap successfull va %p phy_addr %pa.    primary_dmesg_buf_phys_addr %pa primary_dmesg_buf_phys_addr aligned %pa primary_dmesg_size %d size %lu\n", __func__, primary_dmesg,  virt_to_phys(primary_dmesg), primary_dmesg_buf_phys_addr, primary_dmesg_buf_phys_addr&PAGE_MASK, primary_dmesg_size, size);
-
-        iounmap(primary_dmesg);
-
-	 primary_dmesg= ioremap_cache(primary_dmesg_buf_phys_addr&PAGE_MASK, PAGE_SIZE);
-        //primary_dmesg= kmalloc(size, GFP_KERNEL);
-        if(!primary_dmesg)
-                return -ENOMEM;
-
-        printk("%s: ioremap successfull va %p phy_addr %pa.    primary_dmesg_buf_phys_addr %pa primary_dmesg_buf_phys_addr aligned %pa primary_dmesg_size %d size %lu\n", __func__, primary_dmesg,  virt_to_phys(primary_dmesg), primary_dmesg_buf_phys_addr, primary_dmesg_buf_phys_addr&PAGE_MASK, primary_dmesg_size, size);
-
-        iounmap(primary_dmesg);
-
-	 primary_dmesg= ioremap_cache(primary_dmesg_buf_phys_addr, PAGE_SIZE);
-        //primary_dmesg= kmalloc(size, GFP_KERNEL);
-        if(!primary_dmesg)
-                return -ENOMEM;
-
-        printk("%s: ioremap successfull va %p phy_addr %pa.    primary_dmesg_buf_phys_addr %pa primary_dmesg_buf_phys_addr aligned %pa primary_dmesg_size %d size %lu\n", __func__, primary_dmesg,  virt_to_phys(primary_dmesg), primary_dmesg_buf_phys_addr, primary_dmesg_buf_phys_addr&PAGE_MASK, primary_dmesg_size, size);
-
-        iounmap(primary_dmesg);
-	
-	primary_dmesg= ioremap_cache(primary_dmesg_pfn << PAGE_SHIFT, PAGE_SIZE);
-        //primary_dmesg= kmalloc(size, GFP_KERNEL);
-        if(!primary_dmesg)
-                return -ENOMEM;
-
-        printk("%s: ioremap successfull va %p phy_addr %pa.    primary_dmesg_buf_phys_addr %pa primary_dmesg_buf_phys_addr aligned %pa primary_dmesg_size %d size %lu\n", __func__, primary_dmesg,  virt_to_phys(primary_dmesg), primary_dmesg_buf_phys_addr, primary_dmesg_buf_phys_addr&PAGE_MASK, primary_dmesg_size, size);
-
-
-
-	info->reference= 0;
-    	info->data = (char *)primary_dmesg;
-	/* assign this info struct to the file */
-	filp->private_data = info;
-	return 0;
-}
-
-static const struct file_operations my_fops = {
-	.open = my_open,
-	.release = my_close,
-	.mmap = my_mmap,
-};
-
-
-static void remap_dmesg_primary(void){
-
-	file1 = debugfs_create_file("dmesg_primary", 0644, NULL, NULL, &my_fops);	
-	
-}
-
 
 unsigned int inet_addr(char *str)
 {
@@ -281,10 +70,30 @@ void process_crash_kernel_notification(struct work_struct *work){
 	unsigned long long start_up,start_addr;
 	
 	trace_printk("\n");
-	//0=> func total time 
-	time[0]= cpu_clock(_cpu);
 
 	kfree(work);
+
+	//0=> func total time 
+        time[0]= cpu_clock(_cpu);
+	
+	if(flush_pending_pckt_in_filters()){
+                printk("ERROR: %s impossible to flush filters\n", __func__);
+                return;
+        }
+
+        printk("filters flushed\n");
+
+        if(trim_stable_buffer_in_filters()){
+                printk("ERROR: %s impossible to trim filters\n", __func__);
+                return;
+        }
+        printk("stable buffer trimmed\n");
+
+        if(flush_send_buffer_in_filters()){
+                printk("ERROR: %s impossible to flush send buffers\n", __func__);
+                return;
+        }
+        printk("send buffer flushed\n");
 
 	//1=> scan bus time
 	time[1]= cpu_clock(_cpu);
@@ -324,7 +133,7 @@ void process_crash_kernel_notification(struct work_struct *work){
                 return;
         }
 
-	if(flush_pending_pckt_in_filters()){
+	/*if(flush_pending_pckt_in_filters()){
 		printk("ERROR: %s impossible to flush filters\n", __func__);
                 return;
 	}	
@@ -342,7 +151,7 @@ void process_crash_kernel_notification(struct work_struct *work){
                 return;
         }
         printk("send buffer flushed\n");
-	
+	*/
 	//set the net device up
 	//the idea is to emulate what ifconfig does
 	//ifconfig eth1 up
@@ -378,6 +187,8 @@ void process_crash_kernel_notification(struct work_struct *work){
         memcpy(ifr.ifr_name, "eth1", sizeof("eth1"));
         ifr.ifr_addr.sa_family= (sa_family_t) AF_INET;
 
+	swithching_device= 1;
+
         ifr.ifr_flags= IFF_UP|IFF_BROADCAST|IFF_RUNNING;
 
         sock->ops->ioctl(sock,  SIOCSIFFLAGS, (long unsigned int)&ifr);
@@ -405,15 +216,6 @@ void process_crash_kernel_notification(struct work_struct *work){
 	
 	time[5]= cpu_clock(_cpu)- time[5];
 	//printk("network up\n");
-
-	/*if(flush_send_buffer_in_filters()){
-                printk("ERROR: %s impossible to flush send buffers\n", __func__);
-                return;
-        }*/
-
-	update_replica_type_after_failure();
-	trace_printk("replica type updated\n");
-
 	//5=> dummy driver down
         time[6]= cpu_clock(_cpu);
 
@@ -434,7 +236,9 @@ void process_crash_kernel_notification(struct work_struct *work){
         time[6]= cpu_clock(_cpu)- time[6];
 	
 	//printk("dummy_driver down\n");
-
+	
+	update_replica_type_after_failure();
+	trace_printk("replica type updated\n");
 	flush_syscall_info();
 	trace_printk("syscall info updated\n");
 
@@ -446,7 +250,6 @@ void process_crash_kernel_notification(struct work_struct *work){
 	printk("start_addr: ");
 	print_time(&start_addr, 1);
 
-	//remap_dmesg_primary();
 	return;
 }
 
@@ -454,9 +257,6 @@ static int handle_crash_kernel_notification(struct pcn_kmsg_message* inc_msg){
 	struct work_struct* work;
 	struct crash_kernel_notification_msg *msg= (struct crash_kernel_notification_msg *)inc_msg;
 
-	primary_dmesg_buf_phys_addr= msg->dmesg_buf_phys_addr;
-	primary_dmesg_size= msg->dmesg_size;
-	
 	work= kmalloc(sizeof(*work), GFP_ATOMIC);
 	if(!work)
 		return -1;
@@ -486,9 +286,6 @@ static void send_crash_kernel_msg(void){
 	msg->header.type= PCN_KMGS_TYPE_FT_CRASH_KERNEL;
 	msg->header.prio= PCN_KMSG_PRIO_NORMAL;
 	
-	msg->dmesg_buf_phys_addr= get_dmesg_log_buf_phy();
-	msg->dmesg_size= get_dmesg_size();
-	msg->dmesg_pfn= get_pfn_dmesg();
 #ifndef SUPPORT_FOR_CLUSTERING
         for(i = 0; i < NR_CPUS; i++) {
 

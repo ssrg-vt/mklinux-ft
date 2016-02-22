@@ -143,7 +143,7 @@ static struct sock *__ft_syscall_accept_secondary(struct request_sock_queue *que
 		}
 	}
 
-	trace_printk("received connection %i %i from primary\n",ntohs(addr), ntohs(port));
+	//trace_printk("received connection %i %i from primary\n",ntohs(addr), ntohs(port));
 	/* code from: reqsk_queue_get_child */
 
 	child = req->sk;
@@ -184,7 +184,7 @@ static struct sock *ft_syscall_accept_secondary(struct request_sock_queue *queue
 
 	syscall_info_primary= (struct accept_info *) ft_wait_for_syscall_info(&current->ft_pid, current->id_syscall);
         if(!syscall_info_primary){
-                trace_printk(" switching to primary after secondary\n");
+                //trace_printk(" switching to primary after secondary\n");
 
                 /* I am the new primary replica*/
 
@@ -252,7 +252,7 @@ static int after_syscall_rcv_family_primary_after_secondary(struct kiocb *iocb, 
 	char* where_to_copy;
 	int err;
 #endif
-        trace_printk("syscall_id %d\n", current->id_syscall);
+        //trace_printk("syscall_id %d\n", current->id_syscall);
 	
 	store_info= (struct rcv_fam_info_before*) current->useful;
         if(!store_info){
@@ -475,14 +475,14 @@ static int before_syscall_rcv_family_primary_after_secondary(struct kiocb *iocb,
         __wsum my_csum;
         int err, ret= FT_SYSCALL_DROP;
 
-        trace_printk("syscall_id %d size %d port %d\n", current->id_syscall, (int)size, ntohs(sock->sk->ft_filter->tcp_param.dport));
+        //trace_printk("syscall_id %d size %d port %d\n", current->id_syscall, (int)size, ntohs(sock->sk->ft_filter->tcp_param.dport));
 	
 	 /* There migth be pending syscall_info to consume
           *
           */
         syscall_info_primary= (struct rcv_fam_info *) ft_get_pending_syscall_info(&current->ft_pid, current->id_syscall);
         if(syscall_info_primary){
-       		trace_printk("stuff from pri\n");
+       		//trace_printk("stuff from pri\n");
 		/* There is a pending syscall info => the primary consumed the data before sending syscall info to me.
 		 * => the data should be compleately stored on the stable buffer
 	 	 */
@@ -586,7 +586,7 @@ out:
 			FTMPRINTK("%s copied %d bytes from stable buffer\n", __func__, data_size);
 
 			if(data_size!=size){
-				trace_printk("only %d from stable buffer, asking %d to socket?%d\n", data_size, (int) size-data_size, flags&MSG_WAITALL);
+				//trace_printk("only %d from stable buffer, asking %d to socket?%d\n", data_size, (int) size-data_size, flags&MSG_WAITALL);
 				char* filter_id_printed= print_filter_id(sk->ft_filter);
 				FTPRINTK("%s WARNING got only %d bytes in stable buffer (needed %d), asking socket %s next %u\n", __func__, data_size, (int)size, filter_id_printed, tcp_sk(sk)->rcv_nxt );
 				kfree(filter_id_printed);
@@ -699,11 +699,11 @@ static int before_syscall_rcv_family_secondary(struct kiocb *iocb, struct socket
         __wsum my_csum;
         int err, ret= FT_SYSCALL_DROP;
 
-        trace_printk("syscall_id %d size %d port %d\n", current->id_syscall, (int) size, ntohs(sock->sk->ft_filter->tcp_param.dport));
+        //trace_printk("syscall_id %d size %d port %d\n", current->id_syscall, (int) size, ntohs(sock->sk->ft_filter->tcp_param.dport));
 
         syscall_info_primary= (struct rcv_fam_info *) ft_wait_for_syscall_info(&current->ft_pid, current->id_syscall);
         if(!syscall_info_primary){
-                trace_printk("switching to primary after secondary \n");
+                //trace_printk("switching to primary after secondary \n");
 
 		/* I am the new primary replica*/
 
@@ -812,7 +812,7 @@ static int before_syscall_rcv_family_replicated_sock(struct kiocb *iocb, struct 
 
         // Increase the syscall count
         current->id_syscall++;
-	printk("Syscall rcv (sycall id %d) on pid %d tic %u\n", current->id_syscall, current->pid, (unsigned int) current->ft_det_tick);
+	//printk("Syscall rcv (sycall id %d) on pid %d tic %u\n", current->id_syscall, current->pid, (unsigned int) current->ft_det_tick);
 
         if(ft_is_primary_replica(current) || (sock->sk && sock->sk->ft_filter && ft_is_filter_primary(sock->sk->ft_filter))){
                 return before_syscall_rcv_family_primary(iocb, sock, msg, size, flags, ret);
@@ -910,10 +910,10 @@ static int before_syscall_send_family_primary_after_secondary(struct kiocb *iocb
         int iovlen, err;
         __wsum my_csum;
 
-	trace_printk("port %d\n", ntohs(sock->sk->ft_filter->tcp_param.dport));
+	//trace_printk("port %d\n", ntohs(sock->sk->ft_filter->tcp_param.dport));
 	syscall_info_primary= (struct send_fam_info *) ft_get_pending_syscall_info(&current->ft_pid, current->id_syscall);
         if(syscall_info_primary){
-		trace_printk("data from primary\n");
+		//trace_printk("data from primary\n");
 		if(syscall_info_primary->size != size){
 			printk("ERROR: %s for pid %d size of send (syscall id %d) not matching between primary(%d) and secondary(%d)\n", __func__, current->pid, current->id_syscall, syscall_info_primary->size, (int) size);
 			goto out;
@@ -961,7 +961,7 @@ static int before_syscall_send_family_primary_after_secondary(struct kiocb *iocb
 
 		if(!is_send_buffer_flushed(sock->sk->ft_filter->send_buffer)){
 			if(dec_and_check_pending_send_on_send_buffer(sock->sk->ft_filter->send_buffer)){
-        			trace_printk("flushing send buffer of port %d\n", ntohs(sock->sk->ft_filter->tcp_param.dport));
+        			//trace_printk("flushing send buffer of port %d\n", ntohs(sock->sk->ft_filter->tcp_param.dport));
 	                	flush_send_buffer(sock->sk->ft_filter->send_buffer, sock->sk);
                 	}
 		}
@@ -971,7 +971,7 @@ static int before_syscall_send_family_primary_after_secondary(struct kiocb *iocb
 	}
 	else{
 		disable_det_sched(current);
-		trace_printk("sending new data port %d size %d\n", ntohs(sock->sk->ft_filter->tcp_param.dport), (int) size);
+		//trace_printk("sending new data port %d size %d\n", ntohs(sock->sk->ft_filter->tcp_param.dport), (int) size);
 		return before_syscall_send_family_primary(iocb, sock, msg, size);
 	}
 
@@ -985,11 +985,11 @@ static int before_syscall_send_family_secondary(struct kiocb *iocb, struct socke
 	int iovlen, err;
 	__wsum my_csum;
 
-	trace_printk("syscall_id %d size %d on port %d\n", current->id_syscall, (int) size, ntohs(sock->sk->ft_filter->tcp_param.dport));
+	//trace_printk("syscall_id %d size %d on port %d\n", current->id_syscall, (int) size, ntohs(sock->sk->ft_filter->tcp_param.dport));
 
 	sycall_info_primary= (struct send_fam_info *) ft_wait_for_syscall_info(&current->ft_pid, current->id_syscall);
 	if(!sycall_info_primary){
-		trace_printk("changing to primary after secondary\n");
+		//trace_printk("changing to primary after secondary\n");
 		return before_syscall_send_family_primary_after_secondary(iocb, sock, msg, size, ret);
 	}
 
@@ -1083,7 +1083,7 @@ static int before_syscall_send_family_replicated_sock(struct kiocb *iocb, struct
 
     	// Increase the syscall count
     	current->id_syscall++;
-	printk("Syscall send (sycall id %d) on pid %d tic %u\n", current->id_syscall, current->pid, (unsigned int)current->ft_det_tick);
+	//printk("Syscall send (sycall id %d) on pid %d tic %u\n", current->id_syscall, current->pid, (unsigned int)current->ft_det_tick);
 
 	if(ft_is_primary_replica(current) || ft_is_filter_primary(sk->ft_filter)){
                 return before_syscall_send_family_primary(iocb, sock, msg, size);
