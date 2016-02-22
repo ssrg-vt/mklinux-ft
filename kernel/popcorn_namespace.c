@@ -63,6 +63,7 @@ static struct popcorn_namespace *create_popcorn_namespace(struct popcorn_namespa
 	//set_token(ns, current);
 	
 	ns->shepherd = kthread_run(det_shepherd, (void *)ns, "shepherd(%d)", current->pid);
+	printk("Shepherd created %d\n", ns->shepherd->pid);
 
         return ns;
 
@@ -205,17 +206,25 @@ int write_notify_popcorn_ns(struct file *file, const char __user *buffer, unsign
 	return count;
 }
 
-// The shepherd thread
-// Each popcorn namespace should have one.
-// It ends until the namespace perishes
+/*
+ * This is the shepherd thread, it checks the "stalling state" in the deterministic execution
+ * on the primary. The secondary doesn't have this.
+ * Each popcorn namespace should have one,
+ * and it quits until the namespace perishes.
+ */
 int det_shepherd(void *data)
 {
 	struct popcorn_namespace *ns = (struct popcorn_namespace *) data;
 	struct task_list *token, *token2;
 	uint64_t tick, tick2;
 	uint64_t exp = 10;
+	uint64_t pre_bump, bump = 0;
+	struct task_struct *bump_task;
+	unsigned long flags;
 
+	// I spin until the end of this namespace
 	while (!kthread_should_stop()) {
+		bump = -2;
 		if (ns->task_count == 0 ||
 				ns->wait_count == 0) {
 			set_current_state(TASK_INTERRUPTIBLE);
@@ -223,8 +232,7 @@ int det_shepherd(void *data)
 			set_current_state(TASK_RUNNING);
 			continue;
 		}
-		udelay(10);
-		spin_lock(&ns->task_list_lock);
+		spin_lock_irqsave(&ns->task_list_lock, flags);
 		token = ns->token;
 		if (token == NULL ||
 				token->task == NULL) {
@@ -232,43 +240,55 @@ int det_shepherd(void *data)
 			continue;
 		}
 		tick = token->task->ft_det_tick;
-		spin_unlock(&ns->task_list_lock);
-		udelay(10);
-		spin_lock(&ns->task_list_lock);
+		spin_unlock_irqrestore(&ns->task_list_lock, flags);
+		//schedule();
+		udelay(20);
+		spin_lock_irqsave(&ns->task_list_lock, flags);
 		token2 = ns->token;
 		if (token2 == NULL ||
 				token2->task == NULL) {
-			spin_unlock(&ns->task_list_lock);
+			spin_unlock_irqrestore(&ns->task_list_lock, flags);
 			continue;
 		}
 		tick2 = token2->task->ft_det_tick;
-		// Which means the token hasn't been changed during the delay
+		// Which means the token hasn't been changed during the delay,
+		// This is considered as a possible "stalling state"
 		if (token == token2 && tick2 == tick) {
-			// And it is waiting for an event
-			if (token->task->state == TASK_INTERRUPTIBLE &&
+			mb();
+			// ...And it's not waiting for the token
+			if (token->task->ft_det_state != FT_DET_WAIT_TOKEN &&
+			// ...And it is waiting for an event that we care about
+					token->task->state == TASK_INTERRUPTIBLE &&
+			// Hey ey ey, we don't care time & gettimeofday on purpose, this
+			// is only for external events
 					(token->task->current_syscall == __NR_read ||
 				 token->task->current_syscall == __NR_sendto ||
-				 //token->task->current_syscall == __NR_futex ||
 				 token->task->current_syscall == __NR_sendmsg ||
-				 token->task->current_syscall == __NR_close ||
 				 token->task->current_syscall == __NR_recvfrom ||
 				 token->task->current_syscall == __NR_recvmsg ||
 				 token->task->current_syscall == __NR_write ||
 				 token->task->current_syscall == __NR_accept ||
 				 token->task->current_syscall == __NR_poll ||
 				 token->task->current_syscall == __NR_epoll_wait ||
-				 token->task->current_syscall == __NR_wait4 ||
 				 token->task->current_syscall == __NR_socket)) {
-				// Boom-sha-ka-la-ka bump the tick la
 				mb();
-				if (ns->wait_count != 0) {
+				if (ns->wait_count != 0 &&
+						token->task->bumped == 0) {
+					// Boom-sha-ka-la-ka bump the tick la
 					ns->shepherd_bump ++;
+					bump_task = token->task;
+					bump = ns->last_tick + 1;
+					pre_bump = token->task->ft_det_tick;
 					token->task->ft_det_tick = ns->last_tick + 1;
+					update_token(ns);
+					spin_unlock_irqrestore(&ns->task_list_lock, flags);
+					// Hello from the other side!
+					send_bump(bump_task, pre_bump, bump);
+					continue;
 				}
-				update_token(ns);
 			}
 		}
-		spin_unlock(&ns->task_list_lock);
+		spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	}
 }
 
@@ -338,21 +358,26 @@ long __det_start(struct task_struct *task)
 			mb();
 			ns->wait_count ++;
 			spin_unlock_irqrestore(&ns->task_list_lock, flags);
-			wake_up_process(ns->shepherd);
+			// We might get into sleep, time for calling the Cavalry to save the rest of us
+			if (ns->shepherd != NULL &&
+					ft_is_primary_replica(task)) {
+				wake_up_process(ns->shepherd);
+			}
 		}
-		mb();
 		schedule();
 		spin_lock_irqsave(&ns->task_list_lock, flags);
 		mb();
 		ns->wait_count --;
 		spin_unlock_irqrestore(&ns->task_list_lock, flags);
-		wake_up_process(ns->shepherd);
+		if (ns->shepherd != NULL &&
+				ft_is_primary_replica(task)) {
+			wake_up_process(ns->shepherd);
+		}
 	}
 	//trace_printk("det f \n");
+	// Out of waiting for token, now go active
 	spin_lock_irqsave(&ns->task_list_lock, flags);
-	mb();
 	task->ft_det_state = FT_DET_ACTIVE;
-	mb();
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	//trace_printk("has token with %d\n", task->ft_det_tick);
 #ifdef DET_PROF
@@ -417,9 +442,7 @@ long __det_end(struct task_struct *task)
 	ns = task->nsproxy->pop_ns;
 
 	spin_lock_irqsave(&ns->task_list_lock, flags);
-	mb();
 	task->ft_det_state = FT_DET_INACTIVE;
-	mb();
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	mb();
 	update_tick(task, 1);

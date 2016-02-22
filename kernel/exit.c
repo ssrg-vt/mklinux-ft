@@ -1761,9 +1761,6 @@ notask:
 	}
 end:
 	__set_current_state(TASK_RUNNING);
-	if (is_popcorn(current)) {
-		det_wake_up(current);
-	}
 	remove_wait_queue(&current->signal->wait_chldexit, &wo->child_wait);
 	return retval;
 }

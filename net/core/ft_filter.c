@@ -622,7 +622,8 @@ int insert_in_send_buffer_and_csum(struct send_buffer *send_buffer, struct iovec
 		where_to_copy+= iov[i].iov_len;
         }
 	where_to_copy[0]='\0';
-	FTMPRINTK("%s: data %s size %d\n", __func__, &entry->data, len);
+	//FTMPRINTK("%s: data %s size %d\n", __func__, &entry->data, len);
+	//trace_printk("[%d]%s: data %s size %d\n", current->id_syscall, __func__, &entry->data, len);
 
 	spin_lock_bh(&send_buffer->lock);
 	
@@ -790,7 +791,7 @@ int flush_send_buffer(struct send_buffer *send_buffer, struct sock* sock){
 		if (len > INT_MAX)
 			len = INT_MAX;
 
-		trace_printk("sending %d bytes\n", len);
+		//trace_printk("sending %d bytes\n", len);
 		iov.iov_base = (void*) ( (char*) &entry->data + entry->to_consume_start);
 		iov.iov_len = len;
 		msg.msg_name = NULL;
@@ -1568,7 +1569,7 @@ static void release_filter(struct kref *kref){
 #endif
                 filter_printed= print_filter_id(filter);
                 
-		//trace_printk("deleting %s filter %s pckt rcv %lld pckt snt %lld\n", (filter->type & FT_FILTER_FAKE)?"fake":"", filter_printed, filter->local_rx, filter->local_tx);
+		trace_printk("deleting %s filter %s pckt rcv %lld pckt snt %lld\n", (filter->type & FT_FILTER_FAKE)?"fake":"", filter_printed, filter->local_rx, filter->local_tx);
 		if(filter_printed)
                         kfree(filter_printed);
 
@@ -2998,7 +2999,7 @@ inject_syn:
         local_bh_enable();
 	
 	if(ret==NET_RX_DROP){
-		trace_printk("WARNING packet syn seq %u port %d ip %d was dropped\n", my_work->syn_seq, ntohs(my_work->port), my_work->source);
+		//trace_printk("WARNING packet syn seq %u port %d ip %d was dropped\n", my_work->syn_seq, ntohs(my_work->port), my_work->source);
 		goto check_syn;
 	}	
 
@@ -3013,7 +3014,7 @@ wait_for_filter:
 	filter=find_and_get_filter(&creator, filter_id, is_child , my_work->source, my_work->port);
 	if(!filter){
 		if(retry>100){
-			trace_printk("WARNING no filter for port %d\n", htons(my_work->port));
+			//trace_printk("WARNING no filter for port %d\n", htons(my_work->port));
 			goto check_syn;
 		}
 		msleep(1);
@@ -3038,7 +3039,7 @@ wait_for_req:
 
                 filter= find_and_get_filter(&creator, filter_id, is_child , my_work->source, my_work->port);
                 if(!filter){
-                        trace_printk("WARNING no filter active after releasing fake. Port %d\n", htons(my_work->port));
+                        //trace_printk("WARNING no filter active after releasing fake. Port %d\n", htons(my_work->port));
                         goto check_syn;
                 }
 		goto wait_for_req;
@@ -3048,13 +3049,13 @@ wait_for_req:
 		if(filter->req_added==-1){
 			spin_unlock_bh(&filter->lock);
 			put_ft_filter(filter);
-			trace_printk("WARNING req_added is -1 port %d\n",  htons(my_work->port));
+			//trace_printk("WARNING req_added is -1 port %d\n",  htons(my_work->port));
                         goto check_syn;
 		}
 		spin_unlock_bh(&filter->lock);
 		msleep(1);
 		if(retry > 300){
-			trace_printk("WARNING no req_added port %d\n", htons(my_work->port));
+			//trace_printk("WARNING no req_added port %d\n", htons(my_work->port));
 			put_ft_filter(filter);
 			goto check_syn;
 		}
@@ -3079,7 +3080,7 @@ check_syn:
 			goto inject_ack;
 		}
 		if(!my_work->syn_msg){
-			trace_printk("WARNING not possible to recreate syn packt to inject port %d\n", htons(my_work->port));
+			//trace_printk("WARNING not possible to recreate syn packt to inject port %d\n", htons(my_work->port));
                         goto out;
 		}
 		//trace_printk("reinjecting syn port %d\n", htons(my_work->port));
@@ -3117,7 +3118,7 @@ wait_for_hash:
 		spin_unlock_bh(&filter->lock);
 		msleep(1);
                 if(retry > 100){
-                        trace_printk("WARNING ack not accepted port %d\n", htons(my_work->port));
+                        //trace_printk("WARNING ack not accepted port %d\n", htons(my_work->port));
                         goto check_ack;
                 }
                 retry++;
@@ -3141,7 +3142,7 @@ check_ack:
 			goto out;
                 }
 		if(!my_work->ack_msg){
-                        trace_printk("WARNING not possible to recreate syn packt to inject port %d\n", htons(my_work->port));
+                        //trace_printk("WARNING not possible to recreate syn packt to inject port %d\n", htons(my_work->port));
                         goto out;
                 }
 
@@ -4336,11 +4337,11 @@ int try_send_skb_copy(struct net_filter_info *filter, long long pckt_id, long lo
 
                 if(pcn_kmsg_send_long_timeout(secondary_replica.kernel, (struct pcn_kmsg_long_message *)msg, msg_size-sizeof(msg->header), &timeout)<0){
                         printk("ERROR: %s impossible to send to cpu %d, timeout expired port %d\n", __func__, secondary_replica.kernel, ntohs(msg->dport));
-                	trace_printk("impossible to send to cpu %d, timeout expired port %d\n",  secondary_replica.kernel, ntohs(msg->dport));
+                	//trace_printk("impossible to send to cpu %d, timeout expired port %d\n",  secondary_replica.kernel, ntohs(msg->dport));
 			ret= -ETIMEDOUT;
 		}      
 		else{
-			trace_printk("sent port %d\n", ntohs(msg->dport));
+			//trace_printk("sent port %d\n", ntohs(msg->dport));
 		}
                
         }
@@ -5555,8 +5556,7 @@ unsigned int ft_hook_before_tcp_primary_after_secondary(struct sk_buff *skb, str
 			}
 		}
 
-		//trace_printk("listening skb %p: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i \n", skb, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
-
+		//trace_printk("%s listening skb %p: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i \n", __func__, skb, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
 
 		if(!req && !tcp_header->syn && tcp_header->ack){
 			//could be for pending connection
@@ -5583,7 +5583,7 @@ unsigned int ft_hook_before_tcp_primary_after_secondary(struct sk_buff *skb, str
 		size= end-start;
 
 		//trace_printk("tcp_sk(sk)->rcv_nxt %u tcp_sk(sk)->snd_nxt %u\n",tcp_sk(sk)->rcv_nxt, tcp_sk(sk)->snd_nxt);
-		//trace_printk("before status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source)); 
+		//trace_printk("%s before status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", __func__, filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source)); 
 		 
 		 /* Let the packet transit to close connections 
 		  * but change seq/ack_seq
@@ -5599,7 +5599,7 @@ unsigned int ft_hook_before_tcp_primary_after_secondary(struct sk_buff *skb, str
 		start= ntohl(tcp_header->seq);
 		end= ntohl(tcp_header->seq)+ tcp_header->syn+ tcp_header->fin+ skb->len- tcp_header->doff*4;
 		size= end-start;
-		//trace_printk("status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
+		//trace_printk("%s status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", __func__, filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
 
 		 return NF_ACCEPT;
 		}
@@ -5732,7 +5732,7 @@ unsigned int ft_hook_before_tcp_secondary(struct sk_buff *skb, struct net_filter
 		//NOTE send buffer has been initialized with primary seq, so it is safe to not apply any delta to the used ack.
 		remove_from_send_buffer(filter->send_buffer, TCP_SKB_CB(skb)->ack_seq);
 	   
-		//trace_printk("pckt on status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
+		//trace_printk("%s pckt on status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", __func__, filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
 
 		/* save the packet in the stable buffer only if there is actual payload*/
 		if(size && !(size==1 && tcp_header->fin) ){
@@ -6490,6 +6490,7 @@ int flush_send_buffer_in_filters(void){
 						 && filter->ft_sock->sk_state!=TCP_CLOSING){
 						
 						filter->send_buffer->flushed= 2;
+						//trace_printk("flushing send buffer port %d\n", ntohs(filter->tcp_param.dport));
 					       // spin_unlock_bh(&filter->lock);	
 						ret= flush_send_buffer(filter->send_buffer, filter->ft_sock);
 						if(ret){

@@ -105,6 +105,7 @@
 #include <linux/sockios.h>
 #include <linux/atalk.h>
 #include <linux/ft_replication.h>
+#include <linux/ft_common_syscall_management.h>
 #include <linux/ft_time_breakdown.h>
 
 static int sock_no_open(struct inode *irrelevant, struct file *dontcare);
@@ -552,6 +553,8 @@ static inline int __sock_sendmsg_nosec(struct kiocb *iocb, struct socket *sock,
 	int ret;
 #ifdef FT_POPCORN
 	int ft_ret;
+	int flags;
+	uint64_t bump;
 #endif
 	sock_update_classid(sock->sk);
 
@@ -561,6 +564,16 @@ static inline int __sock_sendmsg_nosec(struct kiocb *iocb, struct socket *sock,
 	si->size = size;
 
 #ifdef FT_POPCORN
+	if(ft_is_replicated(current)) {
+		current->id_syscall++;
+		//trace_printk("%d[%d] in syscall %d<%d>\n", current->pid, current->ft_det_tick, current->current_syscall, current->id_syscall);
+		if (ft_is_secondary_replica(current)) {
+			// Wake me up when OSDI ends
+			wait_bump(current);
+		} else if (ft_is_primary_after_secondary_replica(current)) {
+			consume_pending_bump(current);
+		}
+	}
 	ft_ret= ft_before_syscall_send_family(iocb, sock, msg, size, &ret);
 	if(ft_ret==FT_SYSCALL_DROP || IS_ERR_VALUE(ft_ret))
 		return ret;
@@ -569,6 +582,21 @@ static inline int __sock_sendmsg_nosec(struct kiocb *iocb, struct socket *sock,
 
 #ifdef FT_POPCORN
 	ft_after_syscall_send_family(sock, ret);
+	if(ft_is_replicated(current)) {
+		if (ft_is_primary_replica(current)) {
+			// Wake up the other guy
+			spin_lock_irqsave(&current->nsproxy->pop_ns->task_list_lock, flags);
+			current->bumped = 1;
+			bump = current->ft_det_tick;
+			spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
+			// Remember, sending a pcn_msg inside a spinlock could lead to a disaster
+			send_bump(current, bump, -1);
+		}
+		if (current->ft_det_state == FT_DET_SLEEP_SYSCALL ||
+				current->ft_det_state == FT_DET_ACTIVE) {
+			det_wake_up(current);
+		}
+	}
 #endif	
 	return ret;
 }
@@ -713,6 +741,7 @@ static inline int __sock_recvmsg_nosec(struct kiocb *iocb, struct socket *sock,
 	int ret;
 #ifdef FT_POPCORN
         int ft_ret;
+		uint64_t bump;
 #endif
 	sock_update_classid(sock->sk);
 
@@ -723,6 +752,17 @@ static inline int __sock_recvmsg_nosec(struct kiocb *iocb, struct socket *sock,
 	si->flags = flags;
 
 #ifdef FT_POPCORN
+	if(ft_is_replicated(current)) {
+		current->id_syscall++;
+		//trace_printk("%d[%d] in syscall %d<%d>\n", current->pid, current->ft_det_tick, current->current_syscall, current->id_syscall);
+		if (ft_is_secondary_replica(current)) {
+			// Wake me up when OSDI ends
+			wait_bump(current);
+		} else if (ft_is_primary_after_secondary_replica(current)) {
+			consume_pending_bump(current);
+		}
+	}
+
 	//printk("%s called\n", __func__);
         ft_ret= ft_before_syscall_rcv_family(iocb, sock, msg, size, flags, &ret);
         if(ft_ret==FT_SYSCALL_DROP || IS_ERR_VALUE(ft_ret))
@@ -732,6 +772,21 @@ static inline int __sock_recvmsg_nosec(struct kiocb *iocb, struct socket *sock,
 
 #ifdef FT_POPCORN
         ft_after_syscall_rcv_family(iocb, sock, msg, size, flags, ret);
+	if(ft_is_replicated(current)) {
+		if (ft_is_primary_replica(current)) {
+			// Wake up the other guy
+			spin_lock_irqsave(&current->nsproxy->pop_ns->task_list_lock, flags);
+			current->bumped = 1;
+			bump = current->ft_det_tick;
+			spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
+			// Remember, sending a pcn_msg inside a spinlock could lead to a disaster
+			send_bump(current, bump, -1);
+		}
+		if (current->ft_det_state == FT_DET_SLEEP_SYSCALL ||
+				current->ft_det_state == FT_DET_ACTIVE) {
+			det_wake_up(current);
+		}
+	}
 #endif
 
 	return ret;
