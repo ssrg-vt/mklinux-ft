@@ -926,7 +926,7 @@ static uint64_t wait_for_bump_info(struct task_struct *task)
     struct wait_bump_info *wait_info;
     struct wait_bump_info *present_info;
     char *key;
-    uint64_t ret = 0;
+    uint64_t ret = -1;
     int free_key= 0;
 
     key = tickbump_get_key(&task->ft_pid.ft_pop_id, task->ft_pid.level, task->ft_pid.id_array, task->id_syscall, task->ft_det_tick);
@@ -945,11 +945,10 @@ static uint64_t wait_for_bump_info(struct task_struct *task)
         free_key = 1;
     } else {
         present_info = wait_info;
-        while (present_info->populated == 0) {
-            set_task_state(task, TASK_INTERRUPTIBLE);
+        while (present_info->populated == 0 &&
+               ft_is_secondary_replica(task)) {  // This is needed because during the recovery it might still be spinning on a bump
             if (present_info->populated == 0)
-                schedule();
-            set_task_state(task, TASK_RUNNING);
+                schedule_timeout_interruptible(1);
         }
     }
     ret = present_info->new_tick;
@@ -1010,14 +1009,13 @@ void wait_bump(struct task_struct *task)
      * Now the thread puts itself into sleep, until it receives a -1 bump on current tick.
      * Because on the secondary every thread handles the bumps by itself, so no shepherd is needed.
      */
-    while ((new_tick = wait_for_bump_info(task)) != -1) {
-        //printk("%d bumped from %d to %d\n", task->pid, task->ft_det_tick, new_tick);
+    while ((new_tick = wait_for_bump_info(task)) != -1 &&
+               ft_is_secondary_replica(task)) { // This is needed because during the recovery it might still be spinning on a bump
         spin_lock(&ns->task_list_lock);
         task->ft_det_tick = new_tick;
         update_token(ns);
         spin_unlock(&ns->task_list_lock);
     }
-    //printk("%d bumped from %d to %d\n", task->pid, task->ft_det_tick, -1);
 }
 
 int send_bump(struct task_struct *task, uint64_t prev_tick, uint64_t new_tick)
