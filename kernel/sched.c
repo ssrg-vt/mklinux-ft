@@ -4465,6 +4465,11 @@ need_resched:
 		switch_count = &prev->nvcsw;
 	}
 
+	if (prev->ft_det_state == FT_DET_ACTIVE &&
+			prev->current_syscall != 319) {
+		prev->ft_det_state = FT_DET_INACTIVE;
+	}
+
 	pre_schedule(rq, prev);
 
 	if (unlikely(!rq->nr_running))
