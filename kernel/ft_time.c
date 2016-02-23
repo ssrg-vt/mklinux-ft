@@ -106,6 +106,7 @@ long ft_gettimeofday_secondary(struct timeval __user * tv, struct timezone __use
 	primary_info= (struct get_time_info *)ft_wait_for_syscall_info( &current->ft_pid, current->id_syscall);
 
 	if(!primary_info){
+		disable_det_sched(current);
 		return ft_gettimeofday_primary(tv, tz);
 	}
 
