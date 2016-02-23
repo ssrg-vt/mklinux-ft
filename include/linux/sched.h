@@ -202,6 +202,7 @@ print_cfs_rq(struct seq_file *m, int cpu, struct cfs_rq *cfs_rq)
 #define FT_DET_INACTIVE 1
 #define FT_DET_WAIT_TOKEN 2
 #define FT_DET_ACTIVE 3
+#define FT_DET_SLEEP_SYSCALL 4
 
 #define TASK_STATE_TO_CHAR_STR "RSDTtZXxKW"
 
@@ -1623,6 +1624,7 @@ struct task_struct {
 	int ft_det_state;
 	uint64_t ft_det_tick;
 	long current_syscall;
+	int bumped;
 #endif
 };
 

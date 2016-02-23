@@ -41,7 +41,6 @@ struct task_list {
 	struct task_struct *task;
 };
 
-
 struct popcorn_namespace
 {
 	struct kref kref;
@@ -56,8 +55,11 @@ struct popcorn_namespace
 	struct task_list *token;
 	int last_tick;
 	int task_count;
-	/* The queue for storing wake up information from primary */
-	struct wake_up_buffer wake_up_buffer;
+	/* The shepherd */
+	struct task_struct *shepherd;
+	/* Tasks that are waiting for the token. */
+	int wait_count;
+	uint64_t shepherd_bump;
 #ifdef DET_PROF
 	uint64_t start_cost[64];
 	uint64_t tick_cost[64];
@@ -101,11 +103,9 @@ static inline void init_task_list(struct popcorn_namespace *ns)
 	ns->token = NULL;
 	ns->last_tick = 0;
 	ns->task_count = 0;
-	sema_init(&(ns->wake_up_buffer.queue_full), MAX_WAKE_UP_BUFFER);
-	sema_init(&(ns->wake_up_buffer.queue_empty), 0);
-	spin_lock_init(&(ns->wake_up_buffer.enqueue_lock));
-	spin_lock_init(&(ns->wake_up_buffer.dequeue_lock));
-	memset(&(ns->wake_up_buffer.wake_up_queue), 0, MAX_WAKE_UP_BUFFER * sizeof(struct sleeping_syscall_request *));
+	ns->wait_count = 0;
+	ns->shepherd = NULL;
+	ns->shepherd_bump = 0;
 #ifdef DET_PROF
 	spin_lock_init(&(ns->tick_cost_lock));
 	int i;
@@ -156,11 +156,14 @@ static inline int add_task_to_ns(struct popcorn_namespace *ns, struct task_struc
 
 	task->ft_det_tick = 0;
 	new_task->task = task;
+	if (ns->shepherd != NULL && ns->shepherd->state == TASK_INTERRUPTIBLE &&
+		ft_is_primary_replica(task)) {
+		wake_up_process(ns->shepherd);
+	}
 	spin_lock_irqsave(&ns->task_list_lock, flags);
 	mb();
 	ns->task_count++;
 	list_add_tail(&new_task->task_list_member, &ns->ns_task_list.task_list_member);
-	mb();
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	return 0;
 }
@@ -174,7 +177,6 @@ static inline int remove_task_from_ns(struct popcorn_namespace *ns, struct task_
 	unsigned long flags;
 
 	spin_lock_irqsave(&ns->task_list_lock, flags);
-	mb();
 	list_for_each_safe(iter, n, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		if (objPtr->task == task) {
@@ -182,7 +184,6 @@ static inline int remove_task_from_ns(struct popcorn_namespace *ns, struct task_
 			kfree(iter);
 			update_token(ns);
 			ns->task_count--;
-			mb();
 			spin_unlock_irqrestore(&ns->task_list_lock, flags);
 #ifdef DET_PROF
 			printk("tick_count now for %d %llu %llu %llu\n", task->pid % 64, ns->start_cost[task->pid % 64], ns->tick_cost[task->pid % 64], ns->end_cost[task->pid % 64]);
@@ -190,11 +191,9 @@ static inline int remove_task_from_ns(struct popcorn_namespace *ns, struct task_
 			ns->start_cost[task->pid % 64] = 1;
 			ns->end_cost[task->pid % 64] = 1;
 #endif
-			//dump_task_list(ns);
 			return 0;
 		}
 	}
-	mb();
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 
 	return -1;
@@ -212,6 +211,7 @@ static inline int update_token(struct popcorn_namespace *ns)
 	if(is_det_sched_disable(current))
                 return 0;
 
+	mb();
 	list_for_each_prev(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		tick_value = objPtr->task->ft_det_tick;
@@ -242,26 +242,23 @@ static inline int update_token(struct popcorn_namespace *ns)
 			}
 		}
 	}
-/*	
-	 if (ns->token != NULL && ns->token->task != NULL && new_token != NULL && new_token->task != NULL)
-	     trace_printk("token from %d to %d\n", ns->token->task->pid, new_token->task->pid);
-	 else if ((ns->token == NULL || ns->token->task == NULL) && (new_token != NULL && new_token->task != NULL))
-	     trace_printk("token from NULL to %d\n", new_token->task->pid);
-	 else if ((ns->token == NULL || ns->token->task == NULL) && (new_token == NULL || new_token->task == NULL))
-	     trace_printk("token from NULL to NULL\n");
-*/	 
+	/*
+	 *if (ns->token != NULL && ns->token->task != NULL && new_token != NULL && new_token->task != NULL)
+	 *    trace_printk("token from %d[%d]<%d> to %d[%d]<%d>\n", ns->token->task->pid, ns->token->task->ft_det_tick, new_token->task->id_syscall, new_token->task->pid, new_token->task->ft_det_tick, new_token->task->id_syscall);
+	 *else if ((ns->token == NULL || ns->token->task == NULL) && (new_token != NULL && new_token->task != NULL))
+	 *    trace_printk("token from NULL to %d[%d]<%d>\n", new_token->task->pid, new_token->task->ft_det_tick, new_token->task->id_syscall);
+	 *else if ((ns->token == NULL || ns->token->task == NULL) && (new_token == NULL || new_token->task == NULL))
+	 *    trace_printk("token from NULL to NULL\n");
+	 */
 	mb();
-	
+
 	ns->token = new_token;
-	mb();
 	if (ns->token != NULL &&
 			ns->token->task != NULL) {
-		mb();
 		ns->last_tick = ns->token->task->ft_det_tick;
 		mb();
 		if (ns->token->task->state == TASK_INTERRUPTIBLE &&
 				ns->token->task->ft_det_state == FT_DET_WAIT_TOKEN) {
-			mb();
 			wake_up_process(ns->token->task);
 		}
 	}
@@ -277,11 +274,8 @@ static inline int update_tick(struct task_struct *task, long tick)
 
 	//dump_task_list(ns);
 	spin_lock_irqsave(&ns->task_list_lock, flags);
-	mb();
 	task->ft_det_tick += tick;
-	mb();
 	update_token(ns);
-	mb();
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	return 1;
 }
@@ -295,19 +289,10 @@ static inline void det_wake_up(struct task_struct *task)
 	ns = task->nsproxy->pop_ns;
 
 	spin_lock_irqsave(&ns->task_list_lock, flags);
-	mb();
-
-	if (ns->last_tick > task->ft_det_tick) {
-	//	task->ft_det_tick = ns->last_tick;
-	}
-	mb();
 	update_token(ns);
-	mb();
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 
-	if (task->ft_det_state == FT_DET_ACTIVE) {
-		__det_start(task);
-	}
+	__det_start(task);
 }
 
 static inline int is_det_active(struct popcorn_namespace *ns, struct task_struct *task);
@@ -319,52 +304,12 @@ static inline int have_token(struct task_struct *task)
 
 	ns = task->nsproxy->pop_ns;
 
-again:
 	task->ft_det_state = FT_DET_WAIT_TOKEN;
-	mb();
 	update_token(ns);
-	mb();
 	if (ns->token != NULL && ns->token->task == task) {
-		if (is_det_active(ns, task)) {
-			retry++;
-			printk("WARNING: %d task which does not have the token is in state FT_DET_ACTIVE [%d](%d)\n", ns->token->task->pid, task->pid, retry);
-			if (retry < TOKEN_RETRY) {
-				goto again;
-			} else {
-				printk("[%d][%d] Critical token error\n", ns->token->task->pid, task->pid);
-				return 1;
-			}
-		}
 		return 1;
 	} else {
 		return 0;
 	}
 }
-
-// checks whether there is a task different from the task parameter which in state FT_DET_ACTIVE.
-// lock must be held to call this function.
-static inline int is_det_active(struct popcorn_namespace *ns, struct task_struct *task)
-{
-	struct list_head *iter= NULL;
-	struct task_list *objPtr;
-	unsigned long flags= 0;
-
-	list_for_each(iter, &ns->ns_task_list.task_list_member) {
-		objPtr = list_entry(iter, struct task_list, task_list_member);
-		if (objPtr->task->ft_det_state == FT_DET_ACTIVE) {
-			if ((task == NULL || objPtr->task != task) &&
-					(objPtr->task->state == TASK_RUNNING)) {
-				trace_printk("(%d)[%ld]%ld holding token while (%d)[%ld]%ld asking for it\n", (int)objPtr->task->pid, objPtr->task->current_syscall, objPtr->task->state, (int) task->pid, task->current_syscall, task->state);
-				// here I give you one moment to figure out the token
-				spin_unlock_irqrestore(&ns->task_list_lock, flags);
-				mdelay(2);
-				spin_lock_irqsave(&ns->task_list_lock, flags);
-				return 1;
-			}
-		}
-	}
-	return 0;
-}
-
-
 #endif /* _POPCORN_NAMESPACE_H */

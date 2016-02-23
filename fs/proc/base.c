@@ -2632,6 +2632,8 @@ static int proc_pid_det_state(struct seq_file *m, struct pid_namespace *pidns,
 	struct list_head *iter= NULL;
 	struct task_list *objPtr;
 	spin_lock(&ns->task_list_lock);
+	seq_printf(m, "waiting: %d\n", ns->wait_count);
+	seq_printf(m, "shepherd_bump: %d\n", ns->shepherd_bump);
 	list_for_each(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		if (ns->token != NULL && objPtr->task == ns->token->task)

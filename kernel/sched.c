@@ -4439,15 +4439,6 @@ need_resched:
 		} else {
 			deactivate_task(rq, prev, DEQUEUE_SLEEP);
 			prev->on_rq = 0;
-			/*
-			 *if (is_popcorn(prev)) {
-			 *    ns = prev->nsproxy->pop_ns;
-			 *    smp_mb();
-			 *    spin_lock(&ns->task_list_lock);
-			 *    update_token(ns);
-			 *    spin_unlock(&ns->task_list_lock);
-			 *}
-			 */
 
 			/*
 			 * If a worker went to sleep, notify and ask workqueue
@@ -4466,8 +4457,9 @@ need_resched:
 	}
 
 	if (prev->ft_det_state == FT_DET_ACTIVE &&
-			prev->current_syscall != 319) {
-		prev->ft_det_state = FT_DET_INACTIVE;
+			prev->current_syscall != 319 &&
+			prev->state == TASK_INTERRUPTIBLE) {
+		prev->ft_det_state = FT_DET_SLEEP_SYSCALL;
 	}
 
 	pre_schedule(rq, prev);

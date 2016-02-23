@@ -811,8 +811,6 @@ static int before_syscall_rcv_family_replicated_sock(struct kiocb *iocb, struct 
         }
 
         // Increase the syscall count
-        current->id_syscall++;
-	//printk("Syscall rcv (sycall id %d) on pid %d tic %u\n", current->id_syscall, current->pid, (unsigned int) current->ft_det_tick);
 
         if(ft_is_primary_replica(current) || (sock->sk && sock->sk->ft_filter && ft_is_filter_primary(sock->sk->ft_filter))){
                 return before_syscall_rcv_family_primary(iocb, sock, msg, size, flags, ret);
@@ -1082,9 +1080,6 @@ static int before_syscall_send_family_replicated_sock(struct kiocb *iocb, struct
 	}
 
     	// Increase the syscall count
-    	current->id_syscall++;
-	//printk("Syscall send (sycall id %d) on pid %d tic %u\n", current->id_syscall, current->pid, (unsigned int)current->ft_det_tick);
-
 	if(ft_is_primary_replica(current) || ft_is_filter_primary(sk->ft_filter)){
                 return before_syscall_send_family_primary(iocb, sock, msg, size);
         }

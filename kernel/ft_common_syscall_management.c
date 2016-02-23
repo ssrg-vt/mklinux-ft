@@ -56,21 +56,6 @@ typedef struct _hash_table{
         list_entry_t **table;
 }hash_table_t;
 
-static inline struct sleeping_syscall_request *alloc_syscall_req (struct task_struct *task, int det_process_count) {
-    struct sleeping_syscall_request *req;
-    req = (struct sleeping_syscall_request *) kmalloc(sizeof(struct sleeping_syscall_request) +
-                sizeof(uint64_t) * (det_process_count + 1), GFP_KERNEL);
-
-    if (!req)
-        return NULL;
-
-    req->header.type = PCN_KMSG_TYPE_FT_SYSCALL_WAKE_UP_INFO;
-    req->header.prio = PCN_KMSG_PRIO_NORMAL;
-    req->ft_pid = task->ft_pid;
-
-    return req;
-}
-
 /* Create an hash table with size @size.
  *
  */
@@ -276,7 +261,7 @@ void* ft_syscall_hash_remove(char *key){
  * pointers so do not free them while not removed from the hashtable.
  */
 void* ft_syscall_hash_add(char *key, void* obj){
-	return hash_add(syscall_hash, key, obj);
+  return hash_add(syscall_hash, key, obj);
 }
 
 /* Return the object stored in syscall_hash in the entry with key @key  
@@ -399,6 +384,28 @@ struct wait_syscall{
 	void *private;
 };
 
+hash_table_t* tickbump_hash;
+
+/*
+ * Message structure for synchronizing bumps
+ */
+struct tick_bump_msg {
+    struct pcn_kmsg_hdr header;
+    struct ft_pop_rep_id ft_pop_id;
+    int level;
+    int id_array[MAX_GENERATION_LENGTH];
+    int syscall_id;
+    uint64_t prev_tick;
+    uint64_t new_tick;
+};
+
+struct wait_bump_info {
+    struct task_struct *task;
+    uint64_t prev_tick;
+    uint64_t new_tick;
+    int populated;
+};
+
 struct send_syscall_work{
         struct work_struct work;
 	u64 time;
@@ -452,12 +459,9 @@ static int create_syscall_msg(struct ft_pop_rep_id* primary_ft_pop_id, int prima
 
 	variable_data= &msg->data;
 
-	key= ft_syscall_get_key(&msg->ft_pop_id, msg->level, msg->id_array, msg->syscall_id);
-	
 	if(syscall_info_size){
 		memcpy(variable_data, syscall_info, syscall_info_size);
 	}
-	kfree(key);
 
 	variable_data= &msg->data+syscall_info_size;
 	if(extra_key_size){
@@ -845,128 +849,237 @@ static int handle_syscall_info_msg(struct pcn_kmsg_message* inc_msg){
 
 }
 
-/*
- * Upon receving the wake up info, the replica is supposed to queue the request in a FIFO.
- * Whenever a system call is trying to wake up, it checks the queue to see if it has a pending
- * syscall on the head of the queue, otherwise it waits until its turn.
- *
- * This is based on a fact that the replica always gets an event later than the primary.
- */
-static int handle_syscall_wake_up_info_msg(struct pcn_kmsg_message* inc_msg)
+char* tickbump_get_key(struct ft_pop_rep_id* ft_pop_id, int level, int* id_array, int id_syscall, uint64_t oldtick)
 {
-    struct popcorn_namespace *ns = NULL;
-    struct sleeping_syscall_request *req;
-    struct task_struct *task;
+    char* string;
+    const int size = 128;
+    int pos,i;
 
-    /* The message will be freed by the dequeuer */
-    req = (struct sleeping_syscall_request*) inc_msg;
-    //printk("Incoming message for synchronizing wake up %d\n", req->ft_pid.ft_pop_id.id);
-    for_each_process(task) {
-        if (task->ft_pid.ft_pop_id.kernel == req->ft_pid.ft_pop_id.kernel &&
-                task->ft_pid.ft_pop_id.id == req->ft_pid.ft_pop_id.id) {
-            ns = task->nsproxy->pop_ns;
-            break;
+    string = kmalloc(size, GFP_ATOMIC);
+    if (!string) {
+        printk("%s impossible to kmalloc\n", __func__);
+        return NULL;
+    }
+
+    pos = snprintf(string, size,"%llu %d %d %d", oldtick, ft_pop_id->kernel, ft_pop_id->id, level);
+    if (pos >= size)
+        goto out_clean;
+
+    if (level) {
+        for(i = 0; i < level; i++) {
+            pos = pos + snprintf(&string[pos], size-pos, " %d", id_array[i]);
+            if (pos >= size)
+                goto out_clean;
         }
     }
-    if (ns == NULL) {
-        printk("Now we have a problem, the process cannot be found.\n");
-        return 1;
+
+    pos = pos + snprintf(&string[pos], size-pos," %d%c", id_syscall,'\0');
+    if (pos >= size)
+        goto out_clean;
+
+    return string;
+
+out_clean:
+    kfree(string);
+    printk("%s: buffer size too small\n", __func__);
+    return NULL;
+}
+
+static int handle_bump_info_msg(struct pcn_kmsg_message* inc_msg)
+{
+    struct tick_bump_msg *msg = (struct tick_bump_msg *) inc_msg;
+    struct wait_bump_info *wait_info;
+    struct wait_bump_info *present_info;
+    char *key;
+
+    key = tickbump_get_key(&msg->ft_pop_id, msg->level, msg->id_array, msg->syscall_id, msg->prev_tick);
+    if (!key)
+        return -ENOMEM;
+
+    wait_info = kmalloc(sizeof(struct wait_bump_info), GFP_ATOMIC);
+    wait_info->task = NULL;
+    wait_info->populated = 1;
+    wait_info->prev_tick = msg->prev_tick;
+    wait_info->new_tick = msg->new_tick;
+
+    if ((present_info = (struct wait_bump_info *) hash_add(tickbump_hash, key, (void *) wait_info))) {
+        if (present_info->task == NULL) {
+            printk("ERROR PRESENT INFO TASK IS NULL %d\n", msg->syscall_id);
+        } else {
+            present_info->prev_tick = wait_info->prev_tick;
+            present_info->new_tick = wait_info->new_tick;
+            present_info->populated = 1;
+            wake_up_process(present_info->task);
+        }
+
+        kfree(key);
+        kfree(wait_info);
     }
 
-    enqueue_wake_up(&(ns->wake_up_buffer), req);
+    pcn_kmsg_free_msg(msg);
 
     return 0;
 }
 
-/*
- * Whenever a system call is waken up from sleeping, a message is sent to replicas.
- * The sequence of syscalls should be serialized.
- */
-int notify_syscall_wakeup(struct task_struct *task, int syscall_id)
+static uint64_t wait_for_bump_info(struct task_struct *task)
 {
-    struct list_head *iter= NULL;
-    struct task_list *objPtr;
-    struct popcorn_namespace *ns;
-    struct sleeping_syscall_request *req;
-    int task_cnt = 0;
+    struct wait_bump_info *wait_info;
+    struct wait_bump_info *present_info;
+    char *key;
+    uint64_t ret = -1;
+    int free_key= 0;
 
-    // Only primary gets to send this message
-    if (!is_popcorn(task) ||
-           !ft_is_primary_replica(task)) {
-        return 0;
+    key = tickbump_get_key(&task->ft_pid.ft_pop_id, task->ft_pid.level, task->ft_pid.id_array, task->id_syscall, task->ft_det_tick);
+    if (!key)
+        return -1;
+    //trace_printk("%d wait bump %s, on %d[%d]<%d>\n", task->pid, key, task->ft_det_tick, task->id_syscall, task->current_syscall);
+
+    wait_info = kmalloc(sizeof(struct wait_bump_info), GFP_ATOMIC);
+    wait_info->task = task;
+    wait_info->populated = 0;
+    wait_info->prev_tick = task->ft_det_tick;
+    wait_info->new_tick = 0;
+
+    if ((present_info = ((struct wait_bump_info *) hash_add(tickbump_hash, key, (void *) wait_info)))) {
+        kfree(wait_info);
+        free_key = 1;
+    } else {
+        present_info = wait_info;
+        while (present_info->populated == 0 &&
+               ft_is_secondary_replica(task)) {  // This is needed because during the recovery it might still be spinning on a bump
+            if (present_info->populated == 0)
+                schedule_timeout_interruptible(1);
+        }
     }
+    ret = present_info->new_tick;
 
-    ns = task->nsproxy->pop_ns;
-    req = alloc_syscall_req(task, ns->task_count);
-    if (!req)
-        return 0;
+    hash_remove(tickbump_hash, key);
+    if (free_key)
+        kfree(key);
 
-    req->syscall_id = syscall_id;
-    req->det_process_count = ns->task_count;
-    //printk("primary notifies wake up on %d of %d\n", task->current_syscall, task->pid);
-    spin_lock(&ns->task_list_lock);
-    list_for_each(iter, &ns->ns_task_list.task_list_member) {
-        objPtr = list_entry(iter, struct task_list, task_list_member);
-        // TODO: what is this barrier here for, we are in a locked section?
-        smp_mb();
-        req->ticks[task_cnt] = atomic_read(&objPtr->task->ft_det_tick);
-        task_cnt++;
-    }
-    spin_unlock(&ns->task_list_lock);
-
-    send_to_all_secondary_replicas(task->ft_popcorn, (struct pcn_kmsg_long_message*) req, sizeof(*req));
-    kfree(req);
-
-    return 1;
+    kfree(present_info);
+    return ret;
 }
 
-void wait_for_wakeup(struct task_struct *task, int syscall_id)
+static uint64_t get_pending_bump_info(struct task_struct *task)
 {
-    struct wake_up_buffer *buf;
-    struct sleeping_syscall_request *req;
+    struct wait_bump_info *wait_info;
+    struct wait_bump_info *present_info;
+    char *key;
+    uint64_t ret = -1;
+    int free_key= 0;
 
-    if (!is_popcorn(task))
-        return;
+    key = tickbump_get_key(&task->ft_pid.ft_pop_id, task->ft_pid.level, task->ft_pid.id_array, task->id_syscall, task->ft_det_tick);
+    if (!key)
+        return -1;
 
-    // Only secondary gets to wait
-    if (ft_is_primary_replica(task))
-        return;
+    present_info = hash_remove(tickbump_hash, key);
 
-    buf = &(task->nsproxy->pop_ns->wake_up_buffer);
-    for (;;) {
-        req = peek_wake_up(buf);
-        if (req != NULL &&
-                task->ft_pid.ft_pop_id.kernel == req->ft_pid.ft_pop_id.kernel &&
-                task->ft_pid.ft_pop_id.id == req->ft_pid.ft_pop_id.id) {
-            //printk("secondary wakes up on %d of %d\n", task->current_syscall, task->pid);
-            break;
-        }
-        schedule();
+    if (present_info) {
+        ret = present_info->new_tick;
+        kfree(present_info);
     }
 
-    dequeue_wake_up(buf);
-    pcn_kmsg_free_msg(req);
+    kfree(key);
+
+    return ret;
+}
+
+void consume_pending_bump(struct task_struct *task)
+{
+    uint64_t new_tick;
+    struct popcorn_namespace *ns;
+    ns = task->nsproxy->pop_ns;
+
+    while ((new_tick = get_pending_bump_info(task)) != -1) {
+        spin_lock(&ns->task_list_lock);
+        task->ft_det_tick = new_tick;
+        update_token(ns);
+        spin_unlock(&ns->task_list_lock);
+    }
+}
+
+void wait_bump(struct task_struct *task)
+{
+    uint64_t new_tick;
+    struct popcorn_namespace *ns;
+    ns = task->nsproxy->pop_ns;
+
+    /*
+     * Now the thread puts itself into sleep, until it receives a -1 bump on current tick.
+     * Because on the secondary every thread handles the bumps by itself, so no shepherd is needed.
+     */
+    while ((new_tick = wait_for_bump_info(task)) != -1 &&
+               ft_is_secondary_replica(task)) { // This is needed because during the recovery it might still be spinning on a bump
+        spin_lock(&ns->task_list_lock);
+        task->ft_det_tick = new_tick;
+        update_token(ns);
+        spin_unlock(&ns->task_list_lock);
+    }
+}
+
+int send_bump(struct task_struct *task, uint64_t prev_tick, uint64_t new_tick)
+{
+    struct tick_bump_msg *msg;
+    ssize_t size;
+
+    //trace_printk("%d is bumping %d to %d [%d]<%d>\n", task->pid, prev_tick, new_tick, task->id_syscall, task->current_syscall);
+    msg = kmalloc(sizeof(struct tick_bump_msg), GFP_KERNEL);
+    if (!msg)
+        return -ENOMEM;
+
+    msg->header.type = PCN_KMSG_TYPE_FT_TICKBUMP_INFO;
+    msg->header.prio = PCN_KMSG_PRIO_NORMAL;
+    memcpy(&(msg->ft_pop_id), &(task->ft_pid.ft_pop_id), sizeof(struct ft_pop_rep_id));
+    msg->level = task->ft_pid.level;
+    if (msg->level) {
+        memcpy(msg->id_array, task->ft_pid.id_array, msg->level * sizeof(int));
+    } else {
+        memset(msg->id_array, 0, msg->level * sizeof(int));
+    }
+    msg->syscall_id = task->id_syscall;
+    msg->prev_tick = prev_tick;
+    msg->new_tick = new_tick;
+    send_to_all_secondary_replicas(task->ft_popcorn, (struct pcn_kmsg_long_message*) msg, sizeof(struct tick_bump_msg));
+    kfree(msg);
+    //trace_printk("%d done sending bump\n", task->pid);
 }
 
 long syscall_hook_enter(struct pt_regs *regs)
 {
         current->current_syscall = regs->orig_ax;
-        if (current->ft_det_state == FT_DET_ACTIVE) {
-            //trace_printk("calling %d\n", regs->orig_ax);
-        }
-        // System call number is in orig_ax
-        // Only increment the system call counter if we see one of the synchronized system calls.
-        // read and write are handled in the socket layer
-        if(ft_is_replicated(current) && (regs->orig_ax == __NR_gettimeofday || regs->orig_ax == __NR_epoll_wait ||
+        current->bumped = 0;
+        /*
+         * System call number is in orig_ax
+         * Only increment the system call counter if we see one of the synchronized system calls.
+         *
+         * Some socket system calls are handled inside the implementation:
+         * __NR_read, __NR_sendto, __NR_sendmsg, __NR_recvfrom, __NR_recvmsg, __NR_write
+         * Because we don't want non-socket read & write to be tracked.
+         */
+        if(ft_is_replicated(current) &&
+                // TODO: orgnize those syscalls in a better way, avoid this tidious if conditions
+                   (regs->orig_ax == __NR_gettimeofday ||
+                    regs->orig_ax == __NR_epoll_wait ||
                     regs->orig_ax == __NR_time ||
                     regs->orig_ax == __NR_poll ||
                     regs->orig_ax == __NR_accept ||
                     regs->orig_ax == __NR_bind ||
                     regs->orig_ax == __NR_listen)) {
-		//note sen and recv family are counted later on
-	//	trace_printk("syscall %d\n", regs->orig_ax);
-                current->id_syscall++;
-		//printk("Syscall %d (sycall id %d) on pid %d tic %u\n", regs->orig_ax, current->id_syscall, current->pid, current->ft_det_tick);
+            current->id_syscall++;
+            //trace_printk("%d[%d] in syscall %d<%d>\n", current->pid, current->ft_det_tick, regs->orig_ax, current->id_syscall);
+            if (ft_is_secondary_replica(current) &&
+                    // Only for external events
+                    (regs->orig_ax != __NR_gettimeofday ||
+                     regs->orig_ax != __NR_time)) {
+                // Wake me up when OSDI ends
+                wait_bump(current);
+            } else if (ft_is_primary_after_secondary_replica(current) &&
+                    // Only for external events
+                    (regs->orig_ax != __NR_gettimeofday ||
+                     regs->orig_ax != __NR_time)) {
+                consume_pending_bump(current);
+            }
         }
 
 	/*if(ft_is_replicated(current))
@@ -978,28 +1091,54 @@ long syscall_hook_enter(struct pt_regs *regs)
 
 void syscall_hook_exit(struct pt_regs *regs)
 {
+        uint64_t bump = 0;
+        unsigned long flags;
         // System call number is in ax
-        if(is_popcorn(current) && (
-                    regs->ax != __NR_popcorn_det_start &&
-                    regs->ax != __NR_popcorn_det_end &&
-                    regs->ax != __NR_popcorn_det_tick)) {
-            // We just woke up from a sleeping syscall
-            if (!(syscall_info_table[regs->ax] & NOSLEEP)) {
-                // Deterministically wake up, basically futex
-                // TODO: too ugly
-                if (current->ft_det_state == FT_DET_ACTIVE) {
-                    //det_wake_up(current);
-                }
+        if(ft_is_replicated(current) &&
+                // TODO: orgnize those syscalls in a better way, avoid this tidious if conditions
+                   (regs->ax == __NR_gettimeofday ||
+                    regs->ax == __NR_epoll_wait ||
+                    regs->ax == __NR_time ||
+                    regs->ax == __NR_poll ||
+                    regs->ax == __NR_accept ||
+                    regs->ax == __NR_bind ||
+                    regs->ax == __NR_listen)) {
+            if (ft_is_primary_replica(current) &&
+                    // Only for external events
+                    (regs->orig_ax != __NR_gettimeofday ||
+                     regs->orig_ax != __NR_time)) {
+                // Wake up the other guy
+                spin_lock_irqsave(&current->nsproxy->pop_ns->task_list_lock, flags);
+                bump = current->ft_det_tick;
+                current->bumped = 1;
+                spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
+                send_bump(current, bump, -1);
+            }
+
+            /*
+             * This means the syscall is wrapped inside a det section, however the syscall may
+             * or may not go to sleep:
+             * 1. The syscall returns from a sleeping state
+             * 2. The syscall didn't get into sleep (Like the read from secondary)
+             * Either case, this syscall should go back to wait for its token
+             *
+             * Alright futex is handled inside the do_futex.
+             */
+            if (current->ft_det_state == FT_DET_SLEEP_SYSCALL ||
+                    current->ft_det_state == FT_DET_ACTIVE) {
+                det_wake_up(current);
             }
         }
         current->current_syscall = -1;
+        current->bumped = 0;
 }
 
 static int __init ft_syscall_common_management_init(void) {
 	ft_syscall_info_wq= create_singlethread_workqueue("ft_syscall_info_wq");
 	pcn_kmsg_register_callback(PCN_KMSG_TYPE_FT_SYSCALL_INFO, handle_syscall_info_msg);
-	pcn_kmsg_register_callback(PCN_KMSG_TYPE_FT_SYSCALL_WAKE_UP_INFO, handle_syscall_wake_up_info_msg);
+	pcn_kmsg_register_callback(PCN_KMSG_TYPE_FT_TICKBUMP_INFO, handle_bump_info_msg);
         syscall_hash= create_hashtable(1009);
+        tickbump_hash = create_hashtable(1009);
         return 0;
 }
 

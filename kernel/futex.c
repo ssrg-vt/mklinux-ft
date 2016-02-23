@@ -1773,6 +1773,7 @@ static void futex_wait_queue_me(struct futex_hash_bucket *hb, struct futex_q *q,
 	if (is_popcorn(current)) {
 		ns = current->nsproxy->pop_ns;
 		spin_lock(&ns->task_list_lock);
+		current->ft_det_state = FT_DET_INACTIVE;
 		mb();
 		update_token(ns);
 		mb();
@@ -2681,8 +2682,9 @@ long do_futex(u32 __user *uaddr, int op, u32 val, ktime_t *timeout,
 		val3 = FUTEX_BITSET_MATCH_ANY;
 	case FUTEX_WAIT_BITSET:
 		ret = futex_wait(uaddr, flags, val, timeout, val3);
-		// At this point the det state be DET_ACTIVE
-		if (is_popcorn(current)) {
+		if (is_popcorn(current) &&
+				(current->ft_det_state == FT_DET_SLEEP_SYSCALL ||
+				 current->ft_det_state == FT_DET_ACTIVE)) {
 			det_wake_up(current);
 		}
 		break;

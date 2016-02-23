@@ -15,6 +15,8 @@
 #include <linux/spinlock.h>
 #include <linux/ft_replication.h>
 #include <linux/sched.h>
+#include <linux/delay.h>
+#include <linux/kthread.h>
 #include <asm/atomic.h>
 #include <asm/msr.h>
 #include <linux/time.h>
@@ -45,6 +47,7 @@ int is_popcorn_namespace_active(struct popcorn_namespace* ns){
 	return 0;
 }
 
+int det_shepherd(void *data);
 static struct popcorn_namespace *create_popcorn_namespace(struct popcorn_namespace *parent_ns)
 {
 	struct popcorn_namespace *ns;
@@ -58,6 +61,9 @@ static struct popcorn_namespace *create_popcorn_namespace(struct popcorn_namespa
 	init_task_list(ns);
 	//add_task_to_ns(ns, current);
 	//set_token(ns, current);
+	
+	ns->shepherd = kthread_run(det_shepherd, (void *)ns, "shepherd(%d)", current->pid);
+	printk("Shepherd created %d\n", ns->shepherd->pid);
 
         return ns;
 
@@ -84,7 +90,11 @@ struct popcorn_namespace *copy_pop_ns(unsigned long flags, struct popcorn_namesp
 
 static void destroy_popcorn_namespace(struct popcorn_namespace *ns)
 {
-        kmem_cache_free(popcorn_ns_cachep, ns);
+	// Also terminate the shepherd
+	if (ns->shepherd != NULL) {
+		kthread_stop(ns->shepherd);
+	}
+	kmem_cache_free(popcorn_ns_cachep, ns);
 }
 
 void free_popcorn_ns(struct kref *kref)
@@ -195,6 +205,93 @@ int write_notify_popcorn_ns(struct file *file, const char __user *buffer, unsign
 
 	return count;
 }
+
+/*
+ * This is the shepherd thread, it checks the "stalling state" in the deterministic execution
+ * on the primary. The secondary doesn't have this.
+ * Each popcorn namespace should have one,
+ * and it quits until the namespace perishes.
+ */
+int det_shepherd(void *data)
+{
+	struct popcorn_namespace *ns = (struct popcorn_namespace *) data;
+	struct task_list *token, *token2;
+	uint64_t tick, tick2;
+	uint64_t exp = 10;
+	uint64_t pre_bump, bump = 0;
+	struct task_struct *bump_task;
+	unsigned long flags;
+
+	// I spin until the end of this namespace
+	while (!kthread_should_stop()) {
+		bump = -2;
+		if (ns->task_count == 0 ||
+				ns->wait_count == 0) {
+			set_current_state(TASK_INTERRUPTIBLE);
+			schedule();
+			set_current_state(TASK_RUNNING);
+			continue;
+		}
+		spin_lock_irqsave(&ns->task_list_lock, flags);
+		token = ns->token;
+		if (token == NULL ||
+				token->task == NULL) {
+			spin_unlock(&ns->task_list_lock);
+			continue;
+		}
+		tick = token->task->ft_det_tick;
+		spin_unlock_irqrestore(&ns->task_list_lock, flags);
+		//schedule();
+		udelay(20);
+		spin_lock_irqsave(&ns->task_list_lock, flags);
+		token2 = ns->token;
+		if (token2 == NULL ||
+				token2->task == NULL) {
+			spin_unlock_irqrestore(&ns->task_list_lock, flags);
+			continue;
+		}
+		tick2 = token2->task->ft_det_tick;
+		// Which means the token hasn't been changed during the delay,
+		// This is considered as a possible "stalling state"
+		if (token == token2 && tick2 == tick) {
+			mb();
+			// ...And it's not waiting for the token
+			if (token->task->ft_det_state != FT_DET_WAIT_TOKEN &&
+			// ...And it is waiting for an event that we care about
+					token->task->state == TASK_INTERRUPTIBLE &&
+			// Hey ey ey, we don't care time & gettimeofday on purpose, this
+			// is only for external events
+					(token->task->current_syscall == __NR_read ||
+				 token->task->current_syscall == __NR_sendto ||
+				 token->task->current_syscall == __NR_sendmsg ||
+				 token->task->current_syscall == __NR_recvfrom ||
+				 token->task->current_syscall == __NR_recvmsg ||
+				 token->task->current_syscall == __NR_write ||
+				 token->task->current_syscall == __NR_accept ||
+				 token->task->current_syscall == __NR_poll ||
+				 token->task->current_syscall == __NR_epoll_wait ||
+				 token->task->current_syscall == __NR_socket)) {
+				mb();
+				if (ns->wait_count != 0 &&
+						token->task->bumped == 0) {
+					// Boom-sha-ka-la-ka bump the tick la
+					ns->shepherd_bump ++;
+					bump_task = token->task;
+					bump = ns->last_tick + 1;
+					pre_bump = token->task->ft_det_tick;
+					token->task->ft_det_tick = ns->last_tick + 1;
+					update_token(ns);
+					spin_unlock_irqrestore(&ns->task_list_lock, flags);
+					// Hello from the other side!
+					send_bump(bump_task, pre_bump, bump);
+					continue;
+				}
+			}
+		}
+		spin_unlock_irqrestore(&ns->task_list_lock, flags);
+	}
+}
+
 #ifdef DET_PROF
 __inline__ uint64_t perf_counter(struct timeval *tv)
 {
@@ -249,9 +346,9 @@ long __det_start(struct task_struct *task)
 #endif
 
 	for (;;) {
-		spin_lock_irqsave(&ns->task_list_lock, flags);
-		mb();
 		set_task_state(task, TASK_INTERRUPTIBLE);
+		mb();
+		spin_lock_irqsave(&ns->task_list_lock, flags);
 		if (have_token(task) || is_det_sched_disable(task)) {
 			mb();
 			set_task_state(task, TASK_RUNNING);
@@ -259,16 +356,28 @@ long __det_start(struct task_struct *task)
 			break;
 		} else {
 			mb();
+			ns->wait_count ++;
 			spin_unlock_irqrestore(&ns->task_list_lock, flags);
+			// We might get into sleep, time for calling the Cavalry to save the rest of us
+			if (ns->shepherd != NULL &&
+					ft_is_primary_replica(task)) {
+				wake_up_process(ns->shepherd);
+			}
 		}
-		mb();
 		schedule();
+		spin_lock_irqsave(&ns->task_list_lock, flags);
+		mb();
+		ns->wait_count --;
+		spin_unlock_irqrestore(&ns->task_list_lock, flags);
+		if (ns->shepherd != NULL &&
+				ft_is_primary_replica(task)) {
+			wake_up_process(ns->shepherd);
+		}
 	}
 	//trace_printk("det f \n");
+	// Out of waiting for token, now go active
 	spin_lock_irqsave(&ns->task_list_lock, flags);
-	mb();
 	task->ft_det_state = FT_DET_ACTIVE;
-	mb();
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	//trace_printk("has token with %d\n", task->ft_det_tick);
 #ifdef DET_PROF
@@ -277,8 +386,6 @@ long __det_start(struct task_struct *task)
 	ns->start_cost[task->pid % 64] += dtime;
 	spin_unlock(&(ns->tick_cost_lock));
 #endif
-
-	//printk("pid %d ticks %d\n", task->pid, (int) task->ft_det_tick);
 
 	return 1;
 }
@@ -335,9 +442,7 @@ long __det_end(struct task_struct *task)
 	ns = task->nsproxy->pop_ns;
 
 	spin_lock_irqsave(&ns->task_list_lock, flags);
-	mb();
 	task->ft_det_state = FT_DET_INACTIVE;
-	mb();
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	mb();
 	update_tick(task, 1);
