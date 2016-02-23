@@ -379,6 +379,9 @@ lookup_protocol:
 	sk->sk_protocol	   = protocol;
 	sk->sk_backlog_rcv = sk->sk_prot->backlog_rcv;
 
+	if (sk->sk_protocol == IPPROTO_TCP)
+		create_filter(current, sk, GFP_KERNEL);
+
 	inet->uc_ttl	= -1;
 	inet->mc_loop	= 1;
 	inet->mc_ttl	= 1;
