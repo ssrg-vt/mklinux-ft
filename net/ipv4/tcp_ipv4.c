@@ -1460,6 +1460,7 @@ drop_and_release:
 #endif
 	dst_release(dst);
 drop_and_free:
+	printk("%s drop and free\n");
 	reqsk_free(req);
 drop:
 	return 0;

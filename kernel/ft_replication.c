@@ -559,6 +559,20 @@ void send_to_all_secondary_replicas(struct ft_pop_rep* ft_popcorn, struct pcn_km
 
 }
 
+/* send msg to primary in ft_popcorn.
+ *
+ */
+void send_to_primary(struct ft_pop_rep* ft_popcorn, struct pcn_kmsg_long_message* msg, int msg_size){
+        struct list_head *iter= NULL;
+        struct replica_id secondary_replica;
+        struct replica_id_list* objPtr;
+                
+	if(pcn_kmsg_send_long(ft_popcorn->primary_replica.kernel, msg, msg_size-sizeof(msg->hdr))==-1){
+   		printk("ERROR: %s impossible to send to cpu %d\n", __func__, secondary_replica.kernel);
+        }
+
+
+}      
 /* Checks wheter there is any secondary replica in the system.
  *
  */
