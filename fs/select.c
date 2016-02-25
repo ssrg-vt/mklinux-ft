@@ -968,7 +968,7 @@ SYSCALL_DEFINE3(poll, struct pollfd __user *, ufds, unsigned int, nfds,
 
 #ifdef FT_POPCORN
 	/* Send it to replica */
-	ft_poll_after(ufds, &ret);
+	ft_poll_after(ufds, nfds, &ret);
 	
 #endif
 
