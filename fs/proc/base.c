@@ -2643,7 +2643,7 @@ static int proc_pid_det_state(struct seq_file *m, struct pid_namespace *pidns,
 	}
 	seq_printf(m, "\n");
 	spin_unlock(&ns->task_list_lock);
-
+	print_all_filters();
 	return 0;
 }
 #endif

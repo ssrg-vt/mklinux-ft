@@ -207,6 +207,7 @@ struct net_filter_info{
 	 */
 	int deliver_packets;
 	int ft_primary_closed;
+	struct task_struct* waiting;
 	int ft_tcp_closed;
         int ft_pending_packets;
 	struct list_head pending_work;
@@ -234,6 +235,7 @@ int update_replica_type_after_failure(void);
 struct pcn_kmsg_long_message;
 void send_to_all_secondary_replicas(struct ft_pop_rep* ft_popcorn, struct pcn_kmsg_long_message* msg, int msg_size);
 int is_there_any_secondary_replica(struct ft_pop_rep* ft_popcorn);
+void send_to_primary(struct ft_pop_rep* ft_popcorn, struct pcn_kmsg_long_message* msg, int msg_size);
 
 int maybe_create_replicas(void);
 struct task_struct;
