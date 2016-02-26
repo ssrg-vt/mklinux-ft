@@ -2049,7 +2049,8 @@ out:
                 spin_lock_bh(&sk->ft_filter->lock);
                 sk->ft_filter->ft_tcp_closed=1;
                 spin_unlock_bh(&sk->ft_filter->lock);
-        }
+       // 	trace_printk("dport %u from %pS %pS %pS %pS %pS\n", ntohs(sk->ft_filter->tcp_param.dport), __builtin_return_address(0), __builtin_return_address(1), __builtin_return_address(2), __builtin_return_address(3), __builtin_return_address(4));
+	}
 #endif
 
 	local_bh_enable();
