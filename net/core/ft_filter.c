@@ -1472,7 +1472,8 @@ static void add_filter(struct net_filter_info* filter){
 
         spin_lock_bh(&filter_list_lock);
         list_add_tail(&filter->list_member,&filter_list_head);
-        spin_unlock_bh(&filter_list_lock);
+        trace_printk("port %d\n", ntohs(filter->tcp_param.dport));
+	spin_unlock_bh(&filter_list_lock);
 
 }
 
@@ -1481,6 +1482,7 @@ static void remove_filter(struct net_filter_info* filter){
                 return;
 
         spin_lock_bh(&filter_list_lock);
+	trace_printk("port %d\n", ntohs(filter->tcp_param.dport));
         list_del(&filter->list_member);
         spin_unlock_bh(&filter_list_lock);
 
@@ -1557,6 +1559,9 @@ static void release_filter_from_wq(struct work_struct* work){
 	if (filter){
 
 		if(!(filter->type & FT_FILTER_FAKE)){
+			if(filter->ft_time_wait){
+				trace_printk("releasing time wait port %d\n", ntohs(filter->tcp_param.dport));
+			}
 			if(ft_is_filter_primary(filter)){
 				//if here ref_count is <=0 
 				if(!filter->ft_req){
@@ -1574,6 +1579,10 @@ static void release_filter_from_wq(struct work_struct* work){
 					}
 				}
 				remove_filter(filter);
+				if(filter->ft_time_wait){
+                                	trace_printk("filter removed port %d\n", ntohs(filter->tcp_param.dport));
+                        	}
+
 			}
 			else{
 				if(ft_is_filter_secondary(filter)){
@@ -1594,6 +1603,7 @@ static void release_filter_from_wq(struct work_struct* work){
                 if(filter_printed)
                         kfree(filter_printed);
 #endif
+		trace_printk("port %d\n", ntohs(filter->tcp_param.dport));
 		if(filter->ft_popcorn)
 			put_ft_pop_rep(filter->ft_popcorn);
 		if(filter->wait_queue)
@@ -1656,6 +1666,7 @@ void put_ft_filter(struct net_filter_info* filter){
 static int check_not_valid_ref_count(struct net_filter_info* filter){
 	return atomic_read(&filter->kref.refcount)<=0;
 }
+
 
 static struct net_filter_info* find_filter_count_drop(struct ft_pid *creator, int filter_id, int is_child, __be32 daddr, __be16 dport){
 	struct net_filter_info* filter= NULL;
@@ -1877,14 +1888,16 @@ static int add_filter_coping_pending(struct net_filter_info* filter){
 next:	if(fake_filter){
 		if(!(fake_filter->type & FT_FILTER_FAKE)){
 			pfake= print_filter_id(fake_filter);
-			pnew= print_filter_id(filter);
-			printk("ERROR %s: trying to substitute a real filter %s req %p deliver_packets %d my_initial_out_seq %d in_initial_seq %d pp %d pc %d tcpc %d with new %s out %d in %d\n",__func__, pfake, fake_filter->ft_req, fake_filter->deliver_packets, fake_filter->my_initial_out_seq, fake_filter->in_initial_seq, fake_filter->ft_pending_packets, fake_filter->ft_primary_closed, fake_filter->ft_tcp_closed, pnew, filter->my_initial_out_seq, filter->in_initial_seq);
-			kfree(pfake);	
-			kfree(pnew);
+//			pnew= print_filter_id(filter);
+//			printk("ERROR %s: trying to substitute a real filter %s req %p deliver_packets %d my_initial_out_seq %d in_initial_seq %d state %d pp %d pc %d tcpc %d with new %s out %d in %d\n",__func__, pfake, fake_filter->ft_req, fake_filter->deliver_packets, fake_filter->my_initial_out_seq, fake_filter->in_initial_seq, fake_filter->ft_sock?fake_filter->ft_sock->sk_state:-1, fake_filter->ft_pending_packets, fake_filter->ft_primary_closed, fake_filter->ft_tcp_closed, pnew, filter->my_initial_out_seq, filter->in_initial_seq);
+			printk("ERROR %s trying to substitute a real filter %s req %p sock %p (sk_state %d)tw %p\n", __func__, pfake, fake_filter->ft_req, fake_filter->ft_sock, (fake_filter->ft_sock)?fake_filter->ft_sock->sk_state:-1, fake_filter->ft_time_wait);
+			trace_printk("ERROR %s trying to substitute a real filter %s req %p sock %p (sk_state %d)tw %p\n", __func__, pfake, fake_filter->ft_req, fake_filter->ft_sock, (fake_filter->ft_sock)?fake_filter->ft_sock->sk_state:-1, fake_filter->ft_time_wait);
+			 kfree(pfake);
+//			kfree(pnew);
 			//dump_stack();
 			goto out;
 		}
-
+		trace_printk("sub port %d\n", ntohs(filter->tcp_param.dport));
 		ret= 1;
 
 		if(filter->wait_queue)		
@@ -1935,6 +1948,7 @@ next:	if(fake_filter){
 
 	}
 
+	trace_printk("adding filter port %d\n", ntohs(filter->tcp_param.dport));
 out:	list_add(&filter->list_member,&filter_list_head);
 	spin_unlock_bh(&filter_list_lock);
         
@@ -1985,6 +1999,7 @@ static void add_filter_with_check(struct net_filter_info* filter){
 	}
 
 next:   if(!real_filter){
+		trace_printk("adding fake port %d\n", ntohs(filter->tcp_param.dport));
 		list_add(&filter->list_member,&filter_list_head);
 	}
 
@@ -2142,7 +2157,18 @@ static int create_fake_filter(struct ft_pid *creator, int filter_id, int is_chil
 	}
 	err= init_filter_common(filter, 0);
 	if(err){
-		put_ft_filter(filter);
+		if(filter->ft_popcorn)
+                        put_ft_pop_rep(filter->ft_popcorn);
+                if(filter->wait_queue)
+                        kfree(filter->wait_queue);
+                if(filter->stable_buffer){
+                        free_stable_buffer(filter->stable_buffer);
+                }
+                if(filter->send_buffer){
+                        free_send_buffer(filter->send_buffer);
+                }
+                kmem_cache_free(ft_filters_entries, filter);
+
 		return err;
 	}
 
@@ -2244,6 +2270,18 @@ int ft_create_mini_filter(struct request_sock *req, struct sock *sk, struct sk_b
 		}
 
 		if(err){
+			if(filter->ft_popcorn)
+                	        put_ft_pop_rep(filter->ft_popcorn);
+                	if(filter->wait_queue)
+                        	kfree(filter->wait_queue);
+                	if(filter->stable_buffer){
+                        	free_stable_buffer(filter->stable_buffer);
+                	}
+                	if(filter->send_buffer){
+                        	free_send_buffer(filter->send_buffer);
+                	}
+                	kmem_cache_free(ft_filters_entries, filter);
+
 			return err;
 		}
 
@@ -2260,8 +2298,10 @@ int ft_create_mini_filter(struct request_sock *req, struct sock *sk, struct sk_b
 		filter->deliver_packets= 0;
 
 		if(filter->type & FT_FILTER_PRIMARY_REPLICA){
-			/*if(find_filter(&filter->creator, filter->id, 1 , dport, daddr))
-				printk("AAAAAAAAAAAAAAAAA filter present port %d ", ntohs(dport));*/
+			if(find_filter(&filter->creator, filter->id, 1 , daddr, dport)){
+				printk("AAAAAAAAAAAAAAAAA filter present port %d skb->syn?%d\n", ntohs(dport),tcp_hdr(skb)->syn);
+				trace_printk("AAAAAAAAAAAAAAAAA filter present port %d skb->syn?%d\n", ntohs(dport),tcp_hdr(skb)->syn);
+			}
 			add_filter(filter);
 		}
 		else{
@@ -2309,6 +2349,7 @@ int ft_create_mini_filter(struct request_sock *req, struct sock *sk, struct sk_b
 void ft_change_to_time_wait_filter(struct sock *sk, struct inet_timewait_sock *tw){
 	if(sk->ft_filter){
                         get_ft_filter(sk->ft_filter);
+			trace_printk("going to time_wait port %d\n", ntohs(sk->ft_filter->tcp_param.dport));
 			spin_lock_bh(&sk->ft_filter->lock);
 			sk->ft_filter->ft_time_wait= tw;
                         tw->ft_filter= sk->ft_filter;
@@ -2326,6 +2367,7 @@ void ft_deactivate_sk_after_time_wait_filter(struct inet_timewait_sock *tw){
 			}
 			tw->ft_filter->ft_sock= NULL;
 			spin_unlock_bh(&tw->ft_filter->lock);
+			trace_printk("deact tw port %d\n", ntohs(tw->ft_filter->tcp_param.dport));
 			if(sk)
 				sock_put(sk);
         }
@@ -2359,7 +2401,18 @@ int create_filter(struct task_struct *task, struct sock *sk, gfp_t priority){
 
 		err= init_filter_common(filter, ft_is_primary_replica(task)||ft_is_primary_after_secondary_replica(task));
 		if(err){
-			put_ft_filter(filter);	
+			if(filter->ft_popcorn)
+                        	put_ft_pop_rep(filter->ft_popcorn);
+                	if(filter->wait_queue)
+                        	kfree(filter->wait_queue);
+                	if(filter->stable_buffer){
+                        	free_stable_buffer(filter->stable_buffer);
+                	}
+                	if(filter->send_buffer){
+                        	free_send_buffer(filter->send_buffer);
+                	}
+                	kmem_cache_free(ft_filters_entries, filter);
+
 			return err;
 		}
 	
@@ -3175,14 +3228,15 @@ static void dispatch_handshake_msg(struct work_struct* work){
         int filter_id, got_filter;
 	int not_injected= 1;
 
-	//trace_printk("ack and syn dispatching: syn seq %u  ack seq %u port %d ip %d\n", my_work->syn_seq, my_work->ack_seq, ntohs(my_work->port), my_work->source);
+	trace_printk("ack and syn dispatching: syn seq %u  ack seq %u port %d ip %d\n", my_work->syn_seq, my_work->ack_seq, ntohs(my_work->port), my_work->source);
 
-	filter= find_and_try_get_filter(&listen_filter->creator, listen_filter->id, 1 , my_work->port, my_work->source, &got_filter);
+	filter= find_and_try_get_filter(&listen_filter->creator, listen_filter->id, 1 , my_work->source, my_work->port, &got_filter);
 
 	if(filter){
 
 		if(got_filter){
 			if(!(filter->type & FT_FILTER_FAKE)){
+				trace_printk("ERROR %s found a filter port %d\n", __func__,  ntohs(my_work->port));
 				printk("ERROR %s found a filter port %d\n", __func__,  ntohs(my_work->port));
 				put_ft_filter(filter);
                         	goto out;
@@ -3570,13 +3624,13 @@ static int try_complete_handshake_seq_from_hook(struct sk_buff *skb, struct net_
  */
 static int create_handshake_seq(struct rx_copy_work *my_work, struct sk_buff **copy_skb, __be32* copy_source, __be16* copy_port, int* redirect){
 	struct rx_copy_msg *msg= (struct rx_copy_msg *) my_work->data;
-	struct net_filter_info *filter= ( struct net_filter_info *) my_work->filter;
+	struct net_filter_info *filter= ( struct net_filter_info *) my_work->filter, *child_filter;
 	struct sk_buff *skb;
 	__be32 source=0 ;
 	__be16 port= 0;
 	__u32 syn= 0, ack= 0, seq= 0, rst=0;
 	struct handshake_work *hand_work, *hand_work_app;
-	int size=0 , ret= 1;
+	int size=0 , ret= 1, got_filter;
 
 	if(filter->rx_copy_wq != pckt_dispatcher_pool[PCKT_DISP_POOL_SIZE]){
                 printk("ERROR %s called with filter wq %s\n", __func__, get_wq_name(filter->rx_copy_wq));
@@ -3607,25 +3661,24 @@ static int create_handshake_seq(struct rx_copy_work *my_work, struct sk_buff **c
 		return 0;
 	}
 
-	if(find_filter(&filter->creator, filter->id, 1 , port, source)){
+	child_filter= find_and_try_get_filter(&filter->creator, filter->id, 1 , source, port, &got_filter);
 
-		if(syn){
-			printk("ERROR %s syn %d ack %d rst %d size %d and a filter found, the primary should not have sent this to me\n", __func__, syn, ack, rst, size);
+        if(child_filter){
+
+                if(got_filter){
+                        if(!(child_filter->type & FT_FILTER_FAKE)){
+                                printk("WARINIG %s found a filter port %d\n", __func__,  ntohs(port));
+                        }
+			put_ft_filter(child_filter);
+                }
+                else{
+                        printk("ERROR %s found a filter with negative count port %d\n", __func__,  ntohs(port));
                         goto out_no_save;
-		}
-
-		*redirect= 1;
-                *copy_source= source;
-                *copy_port= port;
-                return 0;
-	}
+                }
+        }
 
 	if(size>0 && !(size==1 && syn)){
 
-		if(syn){
-                        printk("ERROR %s syn %d ack %d rst %d size %d and a filter found, the primary should not have sent this to me\n", __func__, syn, ack, rst, size);
-                        goto out_no_save;
-                }
 
 		__skb_pull(skb, ip_hdrlen(skb));
         	skb_reset_transport_header(skb);
@@ -4069,7 +4122,7 @@ again:
 	}
 
         if(child_filter->type & FT_FILTER_ENABLE){
-        	printk("%s REDIRECTING msg to port %d\n", __func__,  ntohs(child_filter->tcp_param.dport));
+        	trace_printk("REDIRECTING msg id %d to port %d\n", msg->pckt_id, ntohs(child_filter->tcp_param.dport));
 		rx_copy_wq= child_filter->rx_copy_wq;
                 child_filter->ft_pending_packets++;
 		my_work->filter= child_filter;
@@ -4186,7 +4239,7 @@ again:	spin_lock_bh(&filter->lock);
 
 			spin_unlock_bh(&filter->lock);
 
-			printk("WARNING pckt for listen wq on not listen wq\n");
+			trace_printk("WARNING pckt id %d for listen wq on not listen wq\n", msg->pckt_id);
 
 			queue_work(pckt_dispatcher_pool[PCKT_DISP_POOL_SIZE], work);
 			if(next_work)			
@@ -5175,7 +5228,7 @@ static unsigned int check_if_syn_to_drop(struct net_filter_info *filter, struct 
 			goto out;
 		}
 		
-        	child_filter= find_filter(&filter->creator, filter->id, 1 , tcp_header->source, ip_hdr(skb)->saddr);
+        	child_filter= find_filter(&filter->creator, filter->id, 1 , ip_hdr(skb)->saddr,tcp_header->source);
 
 		if(child_filter){
 			ret= NF_DROP;
@@ -5201,7 +5254,7 @@ static unsigned int check_if_syn_to_drop(struct net_filter_info *filter, struct 
                 	}
 		}
 
-		child_filter= find_and_try_get_filter(&filter->creator, filter->id, 1 , tcp_header->source, ip_hdr(skb)->saddr, &got_filter);
+		child_filter= find_and_try_get_filter(&filter->creator, filter->id, 1 , ip_hdr(skb)->saddr, tcp_header->source, &got_filter);
 
                 if(child_filter){
 			
@@ -5262,7 +5315,10 @@ static unsigned int check_if_syn_to_drop(struct net_filter_info *filter, struct 
 	if(filter->waiting)
 		ret= NF_DROP;
 
-out:	__skb_push(skb, ip_hdrlen(skb));
+out:	if(tcp_header->syn && ret!=NF_DROP){
+		trace_printk("syn port %d\n", ntohs(tcp_header->source));
+	}
+	__skb_push(skb, ip_hdrlen(skb));
 
 	return ret;
 
@@ -5293,6 +5349,8 @@ static unsigned int ft_hook_before_network_layer_primary(struct net_filter_info 
 		ret= check_if_syn_to_drop(filter, skb);
 		if(ret == NF_ACCEPT)
 			send_skb_copy(filter, pckt_id, local_tx, skb);
+		else
+			filter->local_rx--;
 		/*ret= try_send_skb_copy(filter, pckt_id, local_tx, skb, 10000);
 		if(IS_ERR_VALUE(ret)){
 			filter->local_rx--;
@@ -6996,7 +7054,7 @@ int update_filter_type_after_failure(void){
 				if(filter->type & FT_FILTER_SECONDARY_REPLICA){
 					filter->type &= ~FT_FILTER_SECONDARY_REPLICA;
 					filter->type |= FT_FILTER_PRIMARY_AFTER_SECONDARY_REPLICA;
-					if( !filter->ft_time_wait && filter->ft_sock){
+					if( filter->ft_time_wait || filter->ft_sock){
 						new= kmalloc(sizeof(*new),GFP_ATOMIC);	
 						if(new){
 							new->filter= filter;
@@ -7019,13 +7077,18 @@ int update_filter_type_after_failure(void){
 	if(!list_empty(&head_filter_to_put)){
 		list_for_each_safe(iter, n, &head_filter_to_put) {
 			new= list_entry(iter, struct list_filters, list_member);
-			if((new->filter->ft_sock->sk_state == TCP_LAST_ACK) || (new->filter->ft_sock->sk_state==TCP_CLOSING)){
+			if(!filter->ft_time_wait && new->filter->ft_sock &&( (new->filter->ft_sock->sk_state == TCP_LAST_ACK) || (new->filter->ft_sock->sk_state==TCP_CLOSING))){
 				tcp_done(new->filter->ft_sock);
 				//trace_printk("calling done port %d\n", ntohs(new->filter->tcp_param.dport));
 			}
 			put_ft_filter(new->filter);
 			//trace_printk("calling put port %d\n", ntohs(new->filter->tcp_param.dport));
-			sock_put(new->filter->ft_sock);
+			if(filter->ft_time_wait){
+				inet_twsk_put(filter->ft_time_wait);	
+			}else{
+				if(new->filter->ft_sock)
+					sock_put(new->filter->ft_sock);
+			}
 			list_del(&new->list_member);
 			kfree(new);
 		}
