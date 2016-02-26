@@ -279,7 +279,7 @@ int send_zero_window_in_filters(void);
 
 //int ft_poll_secondary(struct pollfd __user *events);
 //int ft_poll_primary(struct pollfd __user *events, int nr_events);
-int ft_poll_after(struct pollfd __user *events, int *ret);
+int ft_poll_after(struct pollfd __user *events, unsigned int nfds, int *ret);
 int ft_poll_before(struct pollfd __user *events, unsigned int nfds, int *ret);
 long ft_gettimeofday_primary(struct timeval __user * tv, struct timezone __user * tz);
 long ft_gettimeofday_secondary(struct timeval __user * tv, struct timezone __user * tz);

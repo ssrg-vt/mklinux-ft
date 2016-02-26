@@ -2045,7 +2045,8 @@ void sock_init_data(struct socket *sock, struct sock *sk)
 	atomic_set(&sk->sk_drops, 0);
 	
 #ifdef FT_POPCORN
-	create_filter(current, sk, GFP_KERNEL);	
+	sk->ft_filter= NULL;
+	//create_filter(current, sk, GFP_KERNEL);	
 #endif
 
 }
