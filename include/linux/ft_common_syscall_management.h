@@ -17,6 +17,6 @@
 
 void wait_bump(struct task_struct *task);
 void consume_pending_bump(struct task_struct *task);
-int send_bump(struct task_struct *task, uint64_t prev_tick, uint64_t new_tick);
+int send_bump(struct task_struct *task, int id_syscall, uint64_t prev_tick, uint64_t new_tick);
 
 #endif /* !FT_COMMON_SYSCALL_MANAGEMENT_H */

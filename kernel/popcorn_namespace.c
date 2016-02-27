@@ -219,6 +219,7 @@ int det_shepherd(void *data)
 	uint64_t tick, tick2;
 	uint64_t exp = 10;
 	uint64_t pre_bump, bump = 0;
+	int id_syscall = 0;
 	struct task_struct *bump_task;
 	unsigned long flags;
 
@@ -277,13 +278,14 @@ int det_shepherd(void *data)
 					// Boom-sha-ka-la-ka bump the tick la
 					ns->shepherd_bump ++;
 					bump_task = token->task;
+					id_syscall = token->task->id_syscall;
 					bump = ns->last_tick + 1;
 					pre_bump = token->task->ft_det_tick;
 					token->task->ft_det_tick = ns->last_tick + 1;
 					update_token(ns);
 					spin_unlock_irqrestore(&ns->task_list_lock, flags);
 					// Hello from the other side!
-					send_bump(bump_task, pre_bump, bump);
+					send_bump(bump_task, id_syscall, pre_bump, bump);
 					continue;
 				}
 			}

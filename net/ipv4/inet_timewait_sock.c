@@ -103,14 +103,17 @@ static noinline void inet_twsk_free(struct inet_timewait_sock *tw)
 {
 	struct module *owner = tw->tw_prot->owner;
 	twsk_destructor((struct sock *)tw);
+	struct net_filter_info* filter;
+	
 #ifdef SOCK_REFCNT_DEBUG
 	pr_debug("%s timewait_sock %p released\n", tw->tw_prot->name, tw);
 #endif
 
 #ifdef FT_POPCORN
 	if(tw->ft_filter){
-		put_ft_filter(tw->ft_filter);
+		filter= tw->ft_filter;
 		tw->ft_filter= NULL;
+		put_ft_filter(filter);
 	}
 #endif
 	release_net(twsk_net(tw));

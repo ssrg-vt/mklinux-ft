@@ -1472,7 +1472,6 @@ static void add_filter(struct net_filter_info* filter){
 
         spin_lock_bh(&filter_list_lock);
         list_add_tail(&filter->list_member,&filter_list_head);
-        trace_printk("port %d\n", ntohs(filter->tcp_param.dport));
 	spin_unlock_bh(&filter_list_lock);
 
 }
@@ -1482,7 +1481,6 @@ static void remove_filter(struct net_filter_info* filter){
                 return;
 
         spin_lock_bh(&filter_list_lock);
-	trace_printk("port %d\n", ntohs(filter->tcp_param.dport));
         list_del(&filter->list_member);
         spin_unlock_bh(&filter_list_lock);
 
@@ -1496,20 +1494,20 @@ void print_all_filters(void){
 	struct handshake_work* objPtr= NULL;
 	struct list_head *head;
 
-        spin_lock_bh(&filter_list_lock);
+     /*   spin_lock_bh(&filter_list_lock);
 
         if(!list_empty(&filter_list_head)){
                 list_for_each(iter, &filter_list_head) {
                         filter = list_entry(iter, struct net_filter_info, list_member);
 			filter_id= print_filter_id(filter);
-			trace_printk("%s filter: %s usage: %u sk->state: %u pendig_pckt %u \n",  (filter->type & FT_FILTER_FAKE)?"fake":"", filter_id, atomic_read(&filter->kref.refcount), filter->ft_sock?filter->ft_sock->sk_state:0, filter->ft_pending_packets);
+			trace_printk("%s filter: %s usage: %u sk->state: %u pendig_pckt %u ft_tcp_closed %d tw %p\n",  (filter->type & FT_FILTER_FAKE)?"fake":"", filter_id, atomic_read(&filter->kref.refcount), filter->ft_sock?filter->ft_sock->sk_state:0, filter->ft_pending_packets, filter->ft_tcp_closed, filter->ft_time_wait);
                 	kfree(filter_id);
 		}
         }
 
 	spin_unlock_bh(&filter_list_lock);
-
-	head= &pending_handshake;
+	*/
+	/*head= &pending_handshake;
 	spin_lock_bh(&pending_handshake_lock);
         if(!list_empty(head)){
 
@@ -1533,7 +1531,7 @@ void print_all_filters(void){
         }
 
 	spin_unlock_bh(&pending_handshake_lock);
-
+	*/
 }
 
 int ft_is_filter_primary(struct net_filter_info* filter){
@@ -1558,10 +1556,10 @@ static void release_filter_from_wq(struct work_struct* work){
 
 	if (filter){
 
+		if(filter->ft_sock && filter->ft_sock->sk_state==TCP_LISTEN)
+			printk("WARNING erasing listening socket\n");
+
 		if(!(filter->type & FT_FILTER_FAKE)){
-			if(filter->ft_time_wait){
-				trace_printk("releasing time wait port %d\n", ntohs(filter->tcp_param.dport));
-			}
 			if(ft_is_filter_primary(filter)){
 				//if here ref_count is <=0 
 				if(!filter->ft_req){
@@ -1579,11 +1577,8 @@ static void release_filter_from_wq(struct work_struct* work){
 					}
 				}
 				remove_filter(filter);
-				if(filter->ft_time_wait){
-                                	trace_printk("filter removed port %d\n", ntohs(filter->tcp_param.dport));
-                        	}
 
-			}
+                        }
 			else{
 				if(ft_is_filter_secondary(filter)){
 					flush_workqueue(pckt_dispatcher_pool[PCKT_DISP_POOL_SIZE]);
@@ -1597,13 +1592,26 @@ static void release_filter_from_wq(struct work_struct* work){
 			}
 
 		}
+
+		if(filter->ft_sock)
+                        filter->ft_sock->ft_filter= NULL;
+                if(filter->ft_time_wait)
+                        filter->ft_time_wait->ft_filter= NULL;
+                if(filter->ft_req)
+                        filter->ft_req->ft_filter= NULL;
+
+		while(atomic_read(&filter->kref.refcount)>0){
+                        printk("%s DANNAZIONE somebody increase ref count %d port %d\n", __func__, atomic_read(&filter->kref.refcount), ntohs(filter->tcp_param.dport));
+                        msleep(10);
+                }
+
 #if FT_FILTER_VERBOSE
                 filter_printed= print_filter_id(filter);
                 FTPRINTK("%s: deleting %s filter %s\n", __func__, (filter->type & FT_FILTER_FAKE)?"fake":"", filter_printed);
                 if(filter_printed)
                         kfree(filter_printed);
 #endif
-		trace_printk("port %d\n", ntohs(filter->tcp_param.dport));
+
 		if(filter->ft_popcorn)
 			put_ft_pop_rep(filter->ft_popcorn);
 		if(filter->wait_queue)
@@ -1888,16 +1896,11 @@ static int add_filter_coping_pending(struct net_filter_info* filter){
 next:	if(fake_filter){
 		if(!(fake_filter->type & FT_FILTER_FAKE)){
 			pfake= print_filter_id(fake_filter);
-//			pnew= print_filter_id(filter);
-//			printk("ERROR %s: trying to substitute a real filter %s req %p deliver_packets %d my_initial_out_seq %d in_initial_seq %d state %d pp %d pc %d tcpc %d with new %s out %d in %d\n",__func__, pfake, fake_filter->ft_req, fake_filter->deliver_packets, fake_filter->my_initial_out_seq, fake_filter->in_initial_seq, fake_filter->ft_sock?fake_filter->ft_sock->sk_state:-1, fake_filter->ft_pending_packets, fake_filter->ft_primary_closed, fake_filter->ft_tcp_closed, pnew, filter->my_initial_out_seq, filter->in_initial_seq);
 			printk("ERROR %s trying to substitute a real filter %s req %p sock %p (sk_state %d)tw %p\n", __func__, pfake, fake_filter->ft_req, fake_filter->ft_sock, (fake_filter->ft_sock)?fake_filter->ft_sock->sk_state:-1, fake_filter->ft_time_wait);
 			trace_printk("ERROR %s trying to substitute a real filter %s req %p sock %p (sk_state %d)tw %p\n", __func__, pfake, fake_filter->ft_req, fake_filter->ft_sock, (fake_filter->ft_sock)?fake_filter->ft_sock->sk_state:-1, fake_filter->ft_time_wait);
 			 kfree(pfake);
-//			kfree(pnew);
-			//dump_stack();
 			goto out;
 		}
-		trace_printk("sub port %d\n", ntohs(filter->tcp_param.dport));
 		ret= 1;
 
 		if(filter->wait_queue)		
@@ -1948,7 +1951,6 @@ next:	if(fake_filter){
 
 	}
 
-	trace_printk("adding filter port %d\n", ntohs(filter->tcp_param.dport));
 out:	list_add(&filter->list_member,&filter_list_head);
 	spin_unlock_bh(&filter_list_lock);
         
@@ -1999,7 +2001,6 @@ static void add_filter_with_check(struct net_filter_info* filter){
 	}
 
 next:   if(!real_filter){
-		trace_printk("adding fake port %d\n", ntohs(filter->tcp_param.dport));
 		list_add(&filter->list_member,&filter_list_head);
 	}
 
@@ -2298,10 +2299,6 @@ int ft_create_mini_filter(struct request_sock *req, struct sock *sk, struct sk_b
 		filter->deliver_packets= 0;
 
 		if(filter->type & FT_FILTER_PRIMARY_REPLICA){
-			if(find_filter(&filter->creator, filter->id, 1 , daddr, dport)){
-				printk("AAAAAAAAAAAAAAAAA filter present port %d skb->syn?%d\n", ntohs(dport),tcp_hdr(skb)->syn);
-				trace_printk("AAAAAAAAAAAAAAAAA filter present port %d skb->syn?%d\n", ntohs(dport),tcp_hdr(skb)->syn);
-			}
 			add_filter(filter);
 		}
 		else{
@@ -2349,7 +2346,6 @@ int ft_create_mini_filter(struct request_sock *req, struct sock *sk, struct sk_b
 void ft_change_to_time_wait_filter(struct sock *sk, struct inet_timewait_sock *tw){
 	if(sk->ft_filter){
                         get_ft_filter(sk->ft_filter);
-			trace_printk("going to time_wait port %d\n", ntohs(sk->ft_filter->tcp_param.dport));
 			spin_lock_bh(&sk->ft_filter->lock);
 			sk->ft_filter->ft_time_wait= tw;
                         tw->ft_filter= sk->ft_filter;
@@ -2367,7 +2363,6 @@ void ft_deactivate_sk_after_time_wait_filter(struct inet_timewait_sock *tw){
 			}
 			tw->ft_filter->ft_sock= NULL;
 			spin_unlock_bh(&tw->ft_filter->lock);
-			trace_printk("deact tw port %d\n", ntohs(tw->ft_filter->tcp_param.dport));
 			if(sk)
 				sock_put(sk);
         }
@@ -3228,7 +3223,7 @@ static void dispatch_handshake_msg(struct work_struct* work){
         int filter_id, got_filter;
 	int not_injected= 1;
 
-	trace_printk("ack and syn dispatching: syn seq %u  ack seq %u port %d ip %d\n", my_work->syn_seq, my_work->ack_seq, ntohs(my_work->port), my_work->source);
+	//trace_printk("ack and syn dispatching: syn seq %u  ack seq %u port %d ip %d\n", my_work->syn_seq, my_work->ack_seq, ntohs(my_work->port), my_work->source);
 
 	filter= find_and_try_get_filter(&listen_filter->creator, listen_filter->id, 1 , my_work->source, my_work->port, &got_filter);
 
@@ -3255,31 +3250,6 @@ static void dispatch_handshake_msg(struct work_struct* work){
 inject_syn:
 	local_bh_disable();
 	my_work->dispatcher_thread= current;
-
-/*	filter= find_and_try_get_filter(&listen_filter->creator, listen_filter->id, 1 , my_work->port, my_work->source, &got_filter);
-
-        if(filter){
-
-                if(got_filter){
-                        if(!(filter->type & FT_FILTER_FAKE)){
-                                printk("ERROR %s found a filter port %d\n", __func__,  ntohs(my_work->port));
-                                put_ft_filter(filter);
-                        	local_bh_enable();
-			        goto out;
-                        }
-			trace_printk("fake filter\n");
-                        put_ft_filter(filter);
-                }
-                else{
-                        printk("ERROR %s found a filter with negative count port %d\n", __func__,  ntohs(my_work->port));
-                        local_bh_enable();
-			goto out;
-                }
-        }
-	else{
-		trace_printk("no filter\n");
-	}
-*/
 
         ret= netif_receive_skb(skb);
 	my_work->dispatcher_thread= NULL;
@@ -4137,7 +4107,6 @@ again:
 		*/
                 spin_unlock_bh(&child_filter->lock);
 
-		//trace_printk("requeing packt msg->pckt_id port %d\n", ntohs(child_filter->tcp_param.dport));
 		
 		//if(queue_work_after)
                 	queue_work(rx_copy_wq, work);
@@ -5315,9 +5284,7 @@ static unsigned int check_if_syn_to_drop(struct net_filter_info *filter, struct 
 	if(filter->waiting)
 		ret= NF_DROP;
 
-out:	if(tcp_header->syn && ret!=NF_DROP){
-		trace_printk("syn port %d\n", ntohs(tcp_header->source));
-	}
+out:	
 	__skb_push(skb, ip_hdrlen(skb));
 
 	return ret;

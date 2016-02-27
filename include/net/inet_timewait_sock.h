@@ -135,7 +135,7 @@ struct inet_timewait_sock {
 	struct hlist_node	tw_death_node;
 
 #ifdef FT_POPCORN
-	struct net_filter_info*         ft_filter;
+	volatile struct net_filter_info*         ft_filter;
 #endif
 };
 #define tw_tclass tw_tos

@@ -554,6 +554,7 @@ static inline int __sock_sendmsg_nosec(struct kiocb *iocb, struct socket *sock,
 #ifdef FT_POPCORN
 	int ft_ret;
 	int flags;
+	int id_syscall;
 	uint64_t bump;
 #endif
 	sock_update_classid(sock->sk);
@@ -587,10 +588,11 @@ static inline int __sock_sendmsg_nosec(struct kiocb *iocb, struct socket *sock,
 			// Wake up the other guy
 			spin_lock_irqsave(&current->nsproxy->pop_ns->task_list_lock, flags);
 			current->bumped = 1;
+			id_syscall = current->id_syscall;
 			bump = current->ft_det_tick;
 			spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
 			// Remember, sending a pcn_msg inside a spinlock could lead to a disaster
-			send_bump(current, bump, -1);
+			send_bump(current, id_syscall, bump, -1);
 		}
 		if (current->ft_det_state == FT_DET_SLEEP_SYSCALL ||
 				current->ft_det_state == FT_DET_ACTIVE) {
@@ -740,6 +742,7 @@ static inline int __sock_recvmsg_nosec(struct kiocb *iocb, struct socket *sock,
 	struct sock_iocb *si = kiocb_to_siocb(iocb);
 	int ret;
 #ifdef FT_POPCORN
+	int id_syscall;
         int ft_ret;
 		uint64_t bump;
 #endif
@@ -777,10 +780,11 @@ static inline int __sock_recvmsg_nosec(struct kiocb *iocb, struct socket *sock,
 			// Wake up the other guy
 			spin_lock_irqsave(&current->nsproxy->pop_ns->task_list_lock, flags);
 			current->bumped = 1;
+			id_syscall = current->id_syscall;
 			bump = current->ft_det_tick;
 			spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
 			// Remember, sending a pcn_msg inside a spinlock could lead to a disaster
-			send_bump(current, bump, -1);
+			send_bump(current, id_syscall, bump, -1);
 		}
 		if (current->ft_det_state == FT_DET_SLEEP_SYSCALL ||
 				current->ft_det_state == FT_DET_ACTIVE) {

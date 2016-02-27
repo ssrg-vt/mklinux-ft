@@ -379,7 +379,7 @@ static struct workqueue_struct *ft_syscall_info_wq;
 
 struct wait_syscall{
         struct task_struct *task;
-        int populated;
+        volatile int populated;
 	char* extra_key;
 	void *private;
 };
@@ -403,7 +403,7 @@ struct wait_bump_info {
     struct task_struct *task;
     uint64_t prev_tick;
     uint64_t new_tick;
-    int populated;
+    volatile int populated;
 };
 
 struct send_syscall_work{
@@ -892,6 +892,7 @@ static int handle_bump_info_msg(struct pcn_kmsg_message* inc_msg)
     struct wait_bump_info *present_info;
     char *key;
 
+    trace_printk("got msg %d %d %lld\n", msg->level, msg->syscall_id, msg->prev_tick);
     key = tickbump_get_key(&msg->ft_pop_id, msg->level, msg->id_array, msg->syscall_id, msg->prev_tick);
     if (!key)
         return -ENOMEM;
@@ -902,8 +903,10 @@ static int handle_bump_info_msg(struct pcn_kmsg_message* inc_msg)
     wait_info->prev_tick = msg->prev_tick;
     wait_info->new_tick = msg->new_tick;
 
+    trace_printk("%s\n", key);
     if ((present_info = (struct wait_bump_info *) hash_add(tickbump_hash, key, (void *) wait_info))) {
-        if (present_info->task == NULL) {
+       	trace_printk("%s waiting\n", key);
+	 if (present_info->task == NULL) {
             printk("ERROR PRESENT INFO TASK IS NULL %d\n", msg->syscall_id);
         } else {
             present_info->prev_tick = wait_info->prev_tick;
@@ -932,7 +935,7 @@ static uint64_t wait_for_bump_info(struct task_struct *task)
     key = tickbump_get_key(&task->ft_pid.ft_pop_id, task->ft_pid.level, task->ft_pid.id_array, task->id_syscall, task->ft_det_tick);
     if (!key)
         return -1;
-    //trace_printk("%d wait bump %s, on %d[%d]<%d>\n", task->pid, key, task->ft_det_tick, task->id_syscall, task->current_syscall);
+    trace_printk("%d wait bump %s, on %d[%d]<%d>\n", task->pid, key, task->ft_det_tick, task->id_syscall, task->current_syscall);
 
     wait_info = kmalloc(sizeof(struct wait_bump_info), GFP_ATOMIC);
     wait_info->task = task;
@@ -1018,12 +1021,12 @@ void wait_bump(struct task_struct *task)
     }
 }
 
-int send_bump(struct task_struct *task, uint64_t prev_tick, uint64_t new_tick)
+int send_bump(struct task_struct *task, int id_syscall, uint64_t prev_tick, uint64_t new_tick)
 {
     struct tick_bump_msg *msg;
     ssize_t size;
 
-    //trace_printk("%d is bumping %d to %d [%d]<%d>\n", task->pid, prev_tick, new_tick, task->id_syscall, task->current_syscall);
+    trace_printk("%d is bumping %d to %d [%d]<%d>\n", task->pid, prev_tick, new_tick, id_syscall, task->current_syscall);
     msg = kmalloc(sizeof(struct tick_bump_msg), GFP_KERNEL);
     if (!msg)
         return -ENOMEM;
@@ -1037,12 +1040,12 @@ int send_bump(struct task_struct *task, uint64_t prev_tick, uint64_t new_tick)
     } else {
         memset(msg->id_array, 0, msg->level * sizeof(int));
     }
-    msg->syscall_id = task->id_syscall;
+    msg->syscall_id = id_syscall;
     msg->prev_tick = prev_tick;
     msg->new_tick = new_tick;
     send_to_all_secondary_replicas(task->ft_popcorn, (struct pcn_kmsg_long_message*) msg, sizeof(struct tick_bump_msg));
     kfree(msg);
-    //trace_printk("%d done sending bump\n", task->pid);
+    trace_printk("%d done sending bump\n", task->pid);
 }
 
 long syscall_hook_enter(struct pt_regs *regs)
@@ -1092,6 +1095,7 @@ long syscall_hook_enter(struct pt_regs *regs)
 void syscall_hook_exit(struct pt_regs *regs)
 {
         uint64_t bump = 0;
+        int id_syscall = 0;
         unsigned long flags;
         // System call number is in ax
         if(ft_is_replicated(current) &&
@@ -1110,9 +1114,10 @@ void syscall_hook_exit(struct pt_regs *regs)
                 // Wake up the other guy
                 spin_lock_irqsave(&current->nsproxy->pop_ns->task_list_lock, flags);
                 bump = current->ft_det_tick;
+                id_syscall = current->id_syscall;
                 current->bumped = 1;
                 spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
-                send_bump(current, bump, -1);
+                send_bump(current, id_syscall, bump, -1);
             }
 
             /*

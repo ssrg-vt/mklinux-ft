@@ -66,7 +66,7 @@ struct request_sock {
 	u32				secid;
 	u32				peer_secid;
 #ifdef FT_POPCORN
-	struct net_filter_info*		ft_filter;
+	volatile struct net_filter_info*		ft_filter;
 #endif
 };
 
