@@ -868,7 +868,10 @@ struct epoll_event *ep_find_epoll_event(struct eventpoll *ep, struct file *file,
 
 	/* From fd and file structure, derive epitem */
 	epi = ep_find(ep, file, fd);
-	return &epi->event;
+	if (epi)
+		return &epi->event;
+	else
+		return NULL;
 }
 
 /*
@@ -1284,11 +1287,16 @@ static int ep_send_events_proc(struct eventpoll *ep, struct list_head *head,
 			if (__put_user(revents, &uevent->events) ||
 			    __put_user(epi->event.data, &uevent->data)) {
 				list_add(&epi->rdllink, head);
+				if (eventcnt) {
+					printk("%d ready\n", epi->ffd.fd);
+					ep->ev_fds[eventcnt].fd = epi->ffd.fd;
+					ep->ev_fds[eventcnt].events = revents;
+				}
 				return eventcnt ? eventcnt : -EFAULT;
 			}
+			printk("%d ready\n", epi->ffd.fd);
 			ep->ev_fds[eventcnt].fd = epi->ffd.fd;
 			ep->ev_fds[eventcnt].events = revents;
-			//printk("%d is ready\n", epi->ffd.fd);
 			eventcnt++;
 			uevent++;
 			if (epi->event.events & EPOLLONESHOT)
@@ -1745,7 +1753,7 @@ int ft_ep_poll_secondary(struct eventpoll *ep, struct epoll_event __user *events
 
 			/* From fd and file structure, derive epoll_event */
 			ev = ep_find_epoll_event(ep, ff, epinfo->ev[i].fd);
-			//printk("got fd %d\n", epinfo->ev[i].fd);
+			printk("got fd %d\n", epinfo->ev[i].fd);
 			if (ev == NULL) {
 				printk("OMG llllllllllll%d\n", epinfo->ev[i].fd);
 				goto out;
