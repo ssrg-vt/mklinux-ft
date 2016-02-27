@@ -21,6 +21,7 @@
 #include <linux/syscalls.h>
 #include <linux/fcntl.h>
 #include <linux/popcorn_namespace.h>
+#include <linux/ft_common_syscall_management.h>
 
 #include <asm/uaccess.h>
 #include <asm/ioctls.h>
@@ -98,20 +99,10 @@ void pipe_wait(struct pipe_inode_info *pipe)
 	 * is considered a noninteractive wait:
 	 */
 	prepare_to_wait(&pipe->wait, &wait, TASK_INTERRUPTIBLE);
-	if (is_popcorn(current)) {
-		ns = current->nsproxy->pop_ns;
-		smp_mb();
-		spin_lock(&ns->task_list_lock);
-		update_token(ns);
-		spin_unlock(&ns->task_list_lock);
-	}
 	pipe_unlock(pipe);
 	schedule();
 	finish_wait(&pipe->wait, &wait);
 	pipe_lock(pipe);
-	if (is_popcorn(current)) {
-		det_wake_up(current);
-	}
 }
 
 static int
@@ -365,14 +356,33 @@ pipe_read(struct kiocb *iocb, const struct iovec *_iov,
 	struct inode *inode = filp->f_path.dentry->d_inode;
 	struct pipe_inode_info *pipe;
 	int do_wakeup;
-	ssize_t ret;
+	int id_syscall;
+	ssize_t ret = 0;
 	struct iovec *iov = (struct iovec *)_iov;
 	size_t total_len;
+	int flags;
+	uint64_t bump;
+
+#ifdef FT_POPCORN
+	__det_start(current);
+	if(ft_is_replicated(current)) {
+		current->bumped = 0;
+		current->id_syscall++;
+		mb();
+		if (ft_is_secondary_replica(current)) {
+			// Wake me up when OSDI ends
+			wait_bump(current);
+		} else if (ft_is_primary_after_secondary_replica(current)) {
+			consume_pending_bump(current);
+		}
+	}
+#endif
 
 	total_len = iov_length(iov, nr_segs);
 	/* Null read succeeds. */
-	if (unlikely(total_len == 0))
-		return 0;
+	if (unlikely(total_len == 0)) {
+		goto out_read;
+	}
 
 	do_wakeup = 0;
 	ret = 0;
@@ -467,6 +477,29 @@ redo:
 	}
 	if (ret > 0)
 		file_accessed(filp);
+
+out_read:
+#ifdef FT_POPCORN
+	if(ft_is_replicated(current)) {
+		if (ft_is_primary_replica(current)) {
+			// Wake up the other guy
+			spin_lock_irqsave(&current->nsproxy->pop_ns->task_list_lock, flags);
+			current->bumped = 1;
+			id_syscall = current->id_syscall;
+			mb();
+			bump = current->ft_det_tick;
+			spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
+			// Remember, sending a pcn_msg inside a spinlock could lead to a disaster
+			send_bump(current, id_syscall, bump, -1);
+		}
+		if (current->ft_det_state == FT_DET_SLEEP_SYSCALL ||
+				current->ft_det_state == FT_DET_ACTIVE) {
+			det_wake_up(current);
+		}
+	}
+	__det_end(current);
+#endif
+
 	return ret;
 }
 
@@ -477,16 +510,34 @@ pipe_write(struct kiocb *iocb, const struct iovec *_iov,
 	struct file *filp = iocb->ki_filp;
 	struct inode *inode = filp->f_path.dentry->d_inode;
 	struct pipe_inode_info *pipe;
-	ssize_t ret;
+	ssize_t ret = 0;
 	int do_wakeup;
+	int id_syscall;
 	struct iovec *iov = (struct iovec *)_iov;
 	size_t total_len;
 	ssize_t chars;
+	int flags;
+	uint64_t bump;
+
+#ifdef FT_POPCORN
+	__det_start(current);
+	if(ft_is_replicated(current)) {
+		current->bumped = 0;
+		current->id_syscall++;
+		if (ft_is_secondary_replica(current)) {
+			// Wake me up when OSDI ends
+			wait_bump(current);
+		} else if (ft_is_primary_after_secondary_replica(current)) {
+			consume_pending_bump(current);
+		}
+	}
+#endif
 
 	total_len = iov_length(iov, nr_segs);
 	/* Null write succeeds. */
-	if (unlikely(total_len == 0))
-		return 0;
+	if (unlikely(total_len == 0)) {
+		goto out_write;
+	}
 
 	do_wakeup = 0;
 	ret = 0;
@@ -640,6 +691,27 @@ out:
 	}
 	if (ret > 0)
 		file_update_time(filp);
+out_write:
+#ifdef FT_POPCORN
+	if(ft_is_replicated(current)) {
+		if (ft_is_primary_replica(current)) {
+			// Wake up the other guy
+			spin_lock_irqsave(&current->nsproxy->pop_ns->task_list_lock, flags);
+			current->bumped = 1;
+			bump = current->ft_det_tick;
+			id_syscall = current->id_syscall;
+			spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
+			// Remember, sending a pcn_msg inside a spinlock could lead to a disaster
+			send_bump(current, id_syscall, bump, -1);
+		}
+		if (current->ft_det_state == FT_DET_SLEEP_SYSCALL ||
+				current->ft_det_state == FT_DET_ACTIVE) {
+			det_wake_up(current);
+		}
+	}
+	__det_end(current);
+#endif
+
 	return ret;
 }
 
