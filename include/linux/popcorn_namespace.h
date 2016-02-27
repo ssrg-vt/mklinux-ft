@@ -209,7 +209,7 @@ static inline int update_token(struct popcorn_namespace *ns)
 	uint64_t min_value = ~0;
 
 	if(is_det_sched_disable(current))
-                return 0;
+		return 0;
 
 	mb();
 	list_for_each_prev(iter, &ns->ns_task_list.task_list_member) {
@@ -232,7 +232,7 @@ static inline int update_token(struct popcorn_namespace *ns)
 				 objPtr->task->current_syscall == __NR_epoll_wait ||
 				 objPtr->task->current_syscall == __NR_gettimeofday ||
 				 objPtr->task->current_syscall == __NR_bind ||
-				 objPtr->task->current_syscall == __NR_wait4 ||
+				 //objPtr->task->current_syscall == __NR_wait4 ||
 				 objPtr->task->current_syscall == __NR_nanosleep ||
 				 objPtr->task->current_syscall == __NR_socket ||
 #endif
@@ -242,11 +242,10 @@ static inline int update_token(struct popcorn_namespace *ns)
 			}
 		}
 	}
-	
 	/*if (ns->token != NULL && ns->token->task != NULL && new_token != NULL && new_token->task != NULL)
 	    trace_printk("token from %d[%d]<%d> to %d[%d]<%d>\n", ns->token->task->pid, ns->token->task->ft_det_tick, new_token->task->id_syscall, new_token->task->pid, new_token->task->ft_det_tick, new_token->task->id_syscall);
 	else if ((ns->token == NULL || ns->token->task == NULL) && (new_token != NULL && new_token->task != NULL))
-	    trace_printk("token from NULL to %d[%d]<%d>\n", new_token->task->pid, new_token->task->ft_det_tick, new_token->task->id_syscall);
+		trace_printk("token from NULL to %d[%d]<%d>\n", new_token->task->pid, new_token->task->ft_det_tick, new_token->task->id_syscall);
 	else if ((ns->token == NULL || ns->token->task == NULL) && (new_token == NULL || new_token->task == NULL))
 	    trace_printk("token from NULL to NULL\n");
 	*/

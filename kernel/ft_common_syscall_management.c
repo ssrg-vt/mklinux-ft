@@ -379,7 +379,7 @@ static struct workqueue_struct *ft_syscall_info_wq;
 
 struct wait_syscall{
         struct task_struct *task;
-        volatile int populated;
+        int populated;
 	char* extra_key;
 	void *private;
 };
@@ -403,7 +403,7 @@ struct wait_bump_info {
     struct task_struct *task;
     uint64_t prev_tick;
     uint64_t new_tick;
-    volatile int populated;
+    int populated;
 };
 
 struct send_syscall_work{
@@ -510,9 +510,15 @@ static void send_syscall_info_to_secondary_replicas_from_work(struct work_struct
  */
 void ft_send_syscall_info(struct ft_pop_rep *replica_group, struct ft_pid *primary_pid, int syscall_id, char* syscall_info, unsigned int syscall_info_size){
 	u64 time;
+	char *key;
 	
 	ft_start_time(&time);
 	
+	// For debugging
+	key = ft_syscall_get_key_from_ft_pid(primary_pid, syscall_id);
+	trace_printk("sending %s in %d\n", key, current->current_syscall);
+	kfree(key);
+
 	send_syscall_info_to_secondary_replicas(replica_group, &primary_pid->ft_pop_id, primary_pid->level, primary_pid->id_array, syscall_id, syscall_info, syscall_info_size, NULL, 0);
 	
 	ft_end_time(&time);
@@ -825,9 +831,10 @@ static int handle_syscall_info_msg(struct pcn_kmsg_message* inc_msg){
         wait_info->task= NULL;
         wait_info->populated= 1;
 
+        trace_printk("%s got sync %d[%s]\n", __func__, msg->syscall_id, key);
         if((present_info= ((struct wait_syscall*) ft_syscall_hash_add(key, (void*) wait_info)))){
 		if (present_info->task == NULL) {
-			printk("ERROR PRESENT INFO TASK IS NULL %d\n", msg->syscall_id);
+            printk("%s ERROR PRESENT INFO TASK IS NULL %d[%s]\n", __func__, msg->syscall_id, key);
 		
 		} else {
 	                present_info->private= wait_info->private;
@@ -904,9 +911,8 @@ static int handle_bump_info_msg(struct pcn_kmsg_message* inc_msg)
 
     //trace_printk("%s\n", key);
     if ((present_info = (struct wait_bump_info *) hash_add(tickbump_hash, key, (void *) wait_info))) {
-       	//trace_printk("%s waiting\n", key);
-	 if (present_info->task == NULL) {
-            printk("ERROR PRESENT INFO TASK IS NULL %d\n", msg->syscall_id);
+        if (present_info->task == NULL) {
+            printk("%s ERROR PRESENT INFO TASK IS NULL %d[%s]\n", __func__, msg->syscall_id, key);
         } else {
             present_info->prev_tick = wait_info->prev_tick;
             present_info->new_tick = wait_info->new_tick;
@@ -1048,7 +1054,7 @@ int send_bump(struct task_struct *task, int id_syscall, uint64_t prev_tick, uint
 long syscall_hook_enter(struct pt_regs *regs)
 {
         current->current_syscall = regs->orig_ax;
-        current->bumped = 0;
+        current->bumped = -1;
         /*
          * System call number is in orig_ax
          * Only increment the system call counter if we see one of the synchronized system calls.
@@ -1057,27 +1063,25 @@ long syscall_hook_enter(struct pt_regs *regs)
          * __NR_read, __NR_sendto, __NR_sendmsg, __NR_recvfrom, __NR_recvmsg, __NR_write
          * Because we don't want non-socket read & write to be tracked.
          */
+        if (ft_is_replicated(current))
+            trace_printk("%d[%d] in syscall %d<%d>\n", current->pid, current->ft_det_tick, regs->orig_ax, current->id_syscall);
+
         if(ft_is_replicated(current) &&
                 // TODO: orgnize those syscalls in a better way, avoid this tidious if conditions
-                   (regs->orig_ax == __NR_gettimeofday ||
-                    regs->orig_ax == __NR_epoll_wait ||
-                    regs->orig_ax == __NR_time ||
-                    regs->orig_ax == __NR_poll ||
-                    regs->orig_ax == __NR_accept ||
-                    regs->orig_ax == __NR_bind ||
-                    regs->orig_ax == __NR_listen)) {
+                   (current->current_syscall == __NR_gettimeofday ||
+                    current->current_syscall == __NR_epoll_wait ||
+                    current->current_syscall == __NR_time ||
+                    current->current_syscall == __NR_poll ||
+                    current->current_syscall == __NR_accept ||
+                    current->current_syscall == __NR_accept4 ||
+                    current->current_syscall == __NR_bind ||
+                    current->current_syscall == __NR_listen)) {
             current->id_syscall++;
-            //trace_printk("%d[%d] in syscall %d<%d>\n", current->pid, current->ft_det_tick, regs->orig_ax, current->id_syscall);
-            if (ft_is_secondary_replica(current) &&
-                    // Only for external events
-                    (regs->orig_ax != __NR_gettimeofday ||
-                     regs->orig_ax != __NR_time)) {
+            current->bumped = 0;
+            if (ft_is_secondary_replica(current)) {
                 // Wake me up when OSDI ends
                 wait_bump(current);
-            } else if (ft_is_primary_after_secondary_replica(current) &&
-                    // Only for external events
-                    (regs->orig_ax != __NR_gettimeofday ||
-                     regs->orig_ax != __NR_time)) {
+            } else if (ft_is_primary_after_secondary_replica(current)) {
                 consume_pending_bump(current);
             }
         }
@@ -1097,17 +1101,15 @@ void syscall_hook_exit(struct pt_regs *regs)
         // System call number is in ax
         if(ft_is_replicated(current) &&
                 // TODO: orgnize those syscalls in a better way, avoid this tidious if conditions
-                   (regs->ax == __NR_gettimeofday ||
-                    regs->ax == __NR_epoll_wait ||
-                    regs->ax == __NR_time ||
-                    regs->ax == __NR_poll ||
-                    regs->ax == __NR_accept ||
-                    regs->ax == __NR_bind ||
-                    regs->ax == __NR_listen)) {
-            if (ft_is_primary_replica(current) &&
-                    // Only for external events
-                    (regs->orig_ax != __NR_gettimeofday ||
-                     regs->orig_ax != __NR_time)) {
+                   (current->current_syscall == __NR_gettimeofday ||
+                    current->current_syscall == __NR_epoll_wait ||
+                    current->current_syscall == __NR_time ||
+                    current->current_syscall == __NR_poll ||
+                    current->current_syscall == __NR_accept ||
+                    current->current_syscall == __NR_accept4 ||
+                    current->current_syscall == __NR_bind ||
+                    current->current_syscall == __NR_listen)) {
+            if (ft_is_primary_replica(current)) {
                 // Wake up the other guy
                 spin_lock_irqsave(&current->nsproxy->pop_ns->task_list_lock, flags);
                 bump = current->ft_det_tick;
@@ -1132,7 +1134,7 @@ void syscall_hook_exit(struct pt_regs *regs)
             }
         }
         current->current_syscall = -1;
-        current->bumped = 0;
+        current->bumped = -1;
 }
 
 static int __init ft_syscall_common_management_init(void) {
