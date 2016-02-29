@@ -66,7 +66,7 @@ struct request_sock {
 	u32				secid;
 	u32				peer_secid;
 #ifdef FT_POPCORN
-	volatile struct net_filter_info*		ft_filter;
+	struct net_filter_info*		ft_filter;
 #endif
 };
 
@@ -85,10 +85,13 @@ static inline struct request_sock *reqsk_alloc(const struct request_sock_ops *op
 
 static inline void __reqsk_free(struct request_sock *req)
 {
-#ifdef FT_POPCORN               
+#ifdef FT_POPCORN
+	struct net_filter_info* filter;
+               
 	if(req->ft_filter){
-		put_ft_filter(req->ft_filter);
+		filter= req->ft_filter;
 		req->ft_filter= NULL;
+		put_ft_filter(filter);
 	}
 #endif
 

@@ -340,7 +340,7 @@ struct sock {
 	__u32			sk_mark;
 	u32			sk_classid;
 #ifdef FT_POPCORN
-        volatile struct net_filter_info *ft_filter;
+        struct net_filter_info *ft_filter;
 #endif
 
 	void			(*sk_state_change)(struct sock *sk);

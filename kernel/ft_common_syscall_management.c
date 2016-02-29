@@ -892,7 +892,7 @@ static int handle_bump_info_msg(struct pcn_kmsg_message* inc_msg)
     struct wait_bump_info *present_info;
     char *key;
 
-    trace_printk("got msg %d %d %lld\n", msg->level, msg->syscall_id, msg->prev_tick);
+    //trace_printk("got msg %d %d %lld\n", msg->level, msg->syscall_id, msg->prev_tick);
     key = tickbump_get_key(&msg->ft_pop_id, msg->level, msg->id_array, msg->syscall_id, msg->prev_tick);
     if (!key)
         return -ENOMEM;
@@ -903,9 +903,9 @@ static int handle_bump_info_msg(struct pcn_kmsg_message* inc_msg)
     wait_info->prev_tick = msg->prev_tick;
     wait_info->new_tick = msg->new_tick;
 
-    trace_printk("%s\n", key);
+    //trace_printk("%s\n", key);
     if ((present_info = (struct wait_bump_info *) hash_add(tickbump_hash, key, (void *) wait_info))) {
-       	trace_printk("%s waiting\n", key);
+       	//trace_printk("%s waiting\n", key);
 	 if (present_info->task == NULL) {
             printk("ERROR PRESENT INFO TASK IS NULL %d\n", msg->syscall_id);
         } else {
@@ -935,7 +935,7 @@ static uint64_t wait_for_bump_info(struct task_struct *task)
     key = tickbump_get_key(&task->ft_pid.ft_pop_id, task->ft_pid.level, task->ft_pid.id_array, task->id_syscall, task->ft_det_tick);
     if (!key)
         return -1;
-    trace_printk("%d wait bump %s, on %d[%d]<%d>\n", task->pid, key, task->ft_det_tick, task->id_syscall, task->current_syscall);
+    //trace_printk("%d wait bump %s, on %d[%d]<%d>\n", task->pid, key, task->ft_det_tick, task->id_syscall, task->current_syscall);
 
     wait_info = kmalloc(sizeof(struct wait_bump_info), GFP_ATOMIC);
     wait_info->task = task;
@@ -1026,7 +1026,7 @@ int send_bump(struct task_struct *task, int id_syscall, uint64_t prev_tick, uint
     struct tick_bump_msg *msg;
     ssize_t size;
 
-    trace_printk("%d is bumping %d to %d [%d]<%d>\n", task->pid, prev_tick, new_tick, id_syscall, task->current_syscall);
+    //trace_printk("%d is bumping %d to %d [%d]<%d>\n", task->pid, prev_tick, new_tick, id_syscall, task->current_syscall);
     msg = kmalloc(sizeof(struct tick_bump_msg), GFP_KERNEL);
     if (!msg)
         return -ENOMEM;
@@ -1045,7 +1045,7 @@ int send_bump(struct task_struct *task, int id_syscall, uint64_t prev_tick, uint
     msg->new_tick = new_tick;
     send_to_all_secondary_replicas(task->ft_popcorn, (struct pcn_kmsg_long_message*) msg, sizeof(struct tick_bump_msg));
     kfree(msg);
-    trace_printk("%d done sending bump\n", task->pid);
+    //trace_printk("%d done sending bump\n", task->pid);
 }
 
 long syscall_hook_enter(struct pt_regs *regs)
