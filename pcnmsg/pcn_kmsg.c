@@ -1309,9 +1309,11 @@ int pcn_kmsg_force_flush(unsigned long *timeout)
 }
 
 //NOTE  the following is right now in ticks
-#define FORCED_TIMEOUT 2000000l
-#define UNFORCED_TIMEOUT 8000000l
+#define FORCED_TIMEOUT 1000000l
+#define UNFORCED_TIMEOUT 4000000l
+#define CHANGE_MODE_T 1000
 //#define UNFORCED_TIMEOUT (~0l)
+int change_mode= 0;
 static int pcn_kmsg_poll_handler(void)
 {
 	struct pcn_kmsg_reverse_message *msg;
@@ -1351,11 +1353,16 @@ pull_msg:
 			}
 			pcn_barrier();
 			msg->ready = 0;
+			if(change_mode>0)
+				change_mode--;
 		}
 		else if (ret == -2) { // timout expired
 			KMSG_PRINTK("retry (timout expired %lu ticks) %s %d\n", 
 				(_forced ? UNFORCED_TIMEOUT : FORCED_TIMEOUT),
 				(_forced != forced ? "mode switch" : "same mode"), forced);
+			change_mode++;
+			if(change_mode>CHANGE_MODE_T)
+				force_flush= 1;
 			continue; //don't increment
 		}
 		else if (ret == -3) {// message not ready yet
@@ -1364,7 +1371,7 @@ pull_msg:
 				(_forced != forced ? "mode switch" : "same mode"));
 		}
 		else {// unexpected state
-			printk(KERN_ALERT"%s: win_get_common returned %ld unknown value ABORTING OPERATION FORCED (%d,%d).\n",
+			KMSG_PRINTK(KERN_ALERT"%s: win_get_common returned %ld unknown value ABORTING OPERATION FORCED (%d,%d).\n",
 				__func__, (long)ret, _forced, forced);
 			win_enable_int(win);
 			return work_done;
