@@ -295,11 +295,10 @@ static inline void det_wake_up(struct task_struct *task)
 	__det_start(task);
 }
 
-static inline int is_det_active(struct popcorn_namespace *ns, struct task_struct *task);
+//static inline int is_det_active(struct popcorn_namespace *ns, struct task_struct *task);
 
 static inline int have_token(struct task_struct *task)
 {
-	int retry = 0;
 	struct popcorn_namespace *ns;
 
 	ns = task->nsproxy->pop_ns;

@@ -437,7 +437,6 @@ static int create_syscall_msg(struct ft_pop_rep_id* primary_ft_pop_id, int prima
 	struct syscall_msg* msg;
         int size;
 	char* variable_data;
-        char* key;
 
         size= sizeof(*msg) + syscall_info_size+ extra_key_size;
         msg= kmalloc(size, GFP_KERNEL);
@@ -543,7 +542,7 @@ void ft_send_syscall_info_extra_key(struct ft_pop_rep *replica_group, struct ft_
  */
 void ft_send_syscall_info_from_work(struct ft_pop_rep *replica_group, struct ft_pid *primary_pid, int syscall_id, char* syscall_info, unsigned int syscall_info_size){
 	struct send_syscall_work *work;
-	u64 time;
+	u64 time= 0;
 
         //ft_start_time(&time);
 
@@ -620,7 +619,7 @@ void* ft_wait_for_syscall_info(struct ft_pid *secondary, int id_syscall){
 	char* key;
         int free_key= 0;
 	void* ret= NULL;
-	u64 time;
+	//u64 time;
 	
 	//ft_start_time(&time);
 
@@ -966,11 +965,9 @@ static uint64_t wait_for_bump_info(struct task_struct *task)
 
 static uint64_t get_pending_bump_info(struct task_struct *task)
 {
-    struct wait_bump_info *wait_info;
     struct wait_bump_info *present_info;
     char *key;
     uint64_t ret = -1;
-    int free_key= 0;
 
     key = tickbump_get_key(&task->ft_pid.ft_pop_id, task->ft_pid.level, task->ft_pid.id_array, task->id_syscall, task->ft_det_tick);
     if (!key)
@@ -1024,7 +1021,6 @@ void wait_bump(struct task_struct *task)
 int send_bump(struct task_struct *task, int id_syscall, uint64_t prev_tick, uint64_t new_tick)
 {
     struct tick_bump_msg *msg;
-    ssize_t size;
 
     //trace_printk("%d is bumping %d to %d [%d]<%d>\n", task->pid, prev_tick, new_tick, id_syscall, task->current_syscall);
     msg = kmalloc(sizeof(struct tick_bump_msg), GFP_KERNEL);
@@ -1046,6 +1042,7 @@ int send_bump(struct task_struct *task, int id_syscall, uint64_t prev_tick, uint
     send_to_all_secondary_replicas(task->ft_popcorn, (struct pcn_kmsg_long_message*) msg, sizeof(struct tick_bump_msg));
     kfree(msg);
     //trace_printk("%d done sending bump\n", task->pid);
+    return 0;
 }
 
 long syscall_hook_enter(struct pt_regs *regs)

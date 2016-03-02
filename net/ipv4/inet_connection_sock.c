@@ -282,7 +282,7 @@ struct sock *inet_csk_accept(struct sock *sk, int flags, int *err)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct sock *newsk;
-	int error;
+	int error, ft_ret;
 
 	lock_sock(sk);
 
@@ -292,6 +292,16 @@ struct sock *inet_csk_accept(struct sock *sk, int flags, int *err)
 	error = -EINVAL;
 	if (sk->sk_state != TCP_LISTEN)
 		goto out_err;
+
+#ifdef FT_POPCORN
+        ft_ret = ft_syscall_accept_before(&icsk->icsk_accept_queue, sk, flags, err, &newsk);
+        if(ft_ret == FT_SYSCALL_DROP ||  IS_ERR_VALUE(ft_ret)){
+		if(ft_ret == FT_SYSCALL_DROP) 
+			goto out;
+		else
+			goto out_err;
+        }
+#endif
 
 	/* Find already established connection */
 	if (reqsk_queue_empty(&icsk->icsk_accept_queue)) {
@@ -309,9 +319,12 @@ struct sock *inet_csk_accept(struct sock *sk, int flags, int *err)
 	}
 
 #ifdef FT_POPCORN
-	newsk = ft_syscall_accept(&icsk->icsk_accept_queue, sk, flags, err);
-	if(newsk==NULL){
-		goto out_err;
+	ft_ret = ft_syscall_accept_after(&icsk->icsk_accept_queue, sk, flags, err, &newsk);
+	if(ft_ret == FT_SYSCALL_DROP ||  IS_ERR_VALUE(ft_ret)){
+		if(ft_ret == FT_SYSCALL_DROP)
+			goto out;
+		else
+			goto out_err;
 	}
 #else
 	newsk = reqsk_queue_get_child(&icsk->icsk_accept_queue, sk);

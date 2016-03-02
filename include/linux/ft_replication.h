@@ -265,7 +265,8 @@ int ft_before_syscall_rcv_family(struct kiocb *iocb, struct socket *sock,
 int ft_after_syscall_rcv_family(struct kiocb *iocb, struct socket *sock,
                                        struct msghdr *msg, size_t size, int flags, int ret);
 struct request_sock_queue;
-struct sock *ft_syscall_accept(struct request_sock_queue *queue, struct sock *parent, int flags, int* err);
+int ft_syscall_accept_before(struct request_sock_queue *queue, struct sock *parent, int flags, int* erri, struct sock **newsk);
+int ft_syscall_accept_after(struct request_sock_queue *queue, struct sock *parent, int flags, int* erri, struct sock **newsk);
 
 int remove_and_copy_from_stable_buffer(struct stable_buffer *stable_buffer, struct iovec* iov, int size);
 int insert_in_send_buffer_and_csum(struct send_buffer *send_buffer, struct iovec *iov, int iovlen, int size, __wsum *csum);

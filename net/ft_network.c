@@ -59,7 +59,7 @@ struct accept_info{
 	__be16	dport;
 };
 
-static struct sock *__ft_syscall_accept_primary(struct request_sock_queue *queue, struct sock *parent, int* err){
+static int __ft_syscall_accept_primary(struct request_sock_queue *queue, struct sock *parent, int* err, struct sock **newsk){
 	struct sock* ret= reqsk_queue_get_child(queue, parent);
 	struct accept_info *sys_info;
 
@@ -68,7 +68,7 @@ static struct sock *__ft_syscall_accept_primary(struct request_sock_queue *queue
 		if(!sys_info){
 			printk("ERROR %s impossible to malloc\n", __func__);
 			*err= -ENOMEM;
-			return NULL;
+			return *err;
 		}
 
 		sys_info->daddr= inet_sk(ret)->inet_daddr;
@@ -80,33 +80,27 @@ static struct sock *__ft_syscall_accept_primary(struct request_sock_queue *queue
 
 	//printk("%s sending connection %i %i pid %d \n", __func__, ntohs(inet_sk(ret)->inet_daddr), ntohs(inet_sk(ret)->inet_dport), current->pid);
 
-	return ret;
+	*newsk= ret;
+	return FT_SYSCALL_CONTINUE;
 
 }
 
-static struct sock *__ft_syscall_accept_secondary(struct request_sock_queue *queue, struct sock *parent, int flags, int* err, __be32 addr, __be16 port){
+static int __ft_syscall_accept_secondary(struct request_sock_queue *queue, struct sock *parent, int flags, int* err, __be32 addr, __be16 port, struct sock **newsk){
 	struct request_sock *req;
         struct sock *child;
 	
 	req = reqsk_queue_find_remove(queue, addr, port);
 	if(!req){
-		long timeo = sock_rcvtimeo(parent, flags & O_NONBLOCK);
-
-                /* If this is a non blocking socket don't sleep */
-                if (!timeo){
-                        *err= -EAGAIN ;
-			return NULL;
-		}
-
-                /* code from  inet_csk_wait_for_connect*/
+		/* code from  inet_csk_wait_for_connect*/
 
        		DEFINE_WAIT(wait);
 
         	for (;;) {
 			
 			//printk("%s pid %i waiting for a:%i p:%i \n", __func__, current->pid, ntohs(addr), ntohs(port));
-	
-                	prepare_to_wait_exclusive(sk_sleep(parent), &wait,
+			long timeo= MAX_SCHEDULE_TIMEOUT;
+                
+			prepare_to_wait_exclusive(sk_sleep(parent), &wait,
                                           TASK_INTERRUPTIBLE);
                 	release_sock(parent);
                 	if (!reqsk_queue_find(queue, addr, port))
@@ -123,22 +117,22 @@ static struct sock *__ft_syscall_accept_secondary(struct request_sock_queue *que
                 	*err = sock_intr_errno(timeo);
                 	if (signal_pending(current))
                         	break;
-                	*err = -EAGAIN;
-                	if (!timeo)
-                        	break;
         	}
 
 
         	finish_wait(sk_sleep(parent), &wait);
 
 		if (*err){
-                 	return NULL;
+			*newsk= NULL;
+			printk("ERROR %s error while waiting (err %d)\n", __func__, *err);
+                 	return *err;
 		}
 		else{
 			if(!req){
 				printk("ERROR %s out from loop but not req pid %d\n", __func__, current->pid);
 				*err= -EFAULT;
-				return NULL;
+				*newsk= NULL;
+				return *err;
 			}
 		}
 	}
@@ -154,10 +148,12 @@ static struct sock *__ft_syscall_accept_secondary(struct request_sock_queue *que
         __reqsk_free(req);
         
 
-	return child;
+	*newsk= child;
+
+	return FT_SYSCALL_DROP;
 }
 
-static struct sock *ft_syscall_accept_primary_after_secondary(struct request_sock_queue *queue, struct sock *parent, int flags, int* err){
+static int ft_syscall_accept_primary_after_secondary_before(struct request_sock_queue *queue, struct sock *parent, int flags, int* err, struct sock **newsk){
 	struct accept_info *syscall_info_primary;
 	__be32 addr;
         __be16 port;
@@ -169,15 +165,15 @@ static struct sock *ft_syscall_accept_primary_after_secondary(struct request_soc
 
         	kfree(syscall_info_primary);
 			
-		return __ft_syscall_accept_secondary(queue, parent, flags, err, addr, port);
+		return __ft_syscall_accept_secondary(queue, parent, flags, err, addr, port, newsk);
 	}
 	else{
         	disable_det_sched(current);
-		return __ft_syscall_accept_primary(queue, parent, err);
+		return FT_SYSCALL_CONTINUE;
 	}
 }
 
-static struct sock *ft_syscall_accept_secondary(struct request_sock_queue *queue, struct sock *parent, int flags, int* err){
+static int ft_syscall_accept_secondary_before(struct request_sock_queue *queue, struct sock *parent, int flags, int* err, struct sock **newsk){
 	struct accept_info *syscall_info_primary;
 	__be32 addr;
 	__be16 port;
@@ -188,7 +184,7 @@ static struct sock *ft_syscall_accept_secondary(struct request_sock_queue *queue
 
                 /* I am the new primary replica*/
 
-                return ft_syscall_accept_primary_after_secondary(queue, parent, flags, err);
+                return ft_syscall_accept_primary_after_secondary_before(queue, parent, flags, err, newsk);
         }
 
 	addr= syscall_info_primary->daddr;
@@ -196,47 +192,66 @@ static struct sock *ft_syscall_accept_secondary(struct request_sock_queue *queue
 	
 	kfree(syscall_info_primary);
 
-	return __ft_syscall_accept_secondary(queue, parent, flags, err, addr, port);
+	return __ft_syscall_accept_secondary(queue, parent, flags, err, addr, port, newsk);
 }
 
-static struct sock *ft_syscall_accept_primary(struct request_sock_queue *queue, struct sock *parent, int* err){
+static int ft_syscall_accept_primary_after(struct request_sock_queue *queue, struct sock *parent, int* err,  struct sock **newsk){
 	
-	return __ft_syscall_accept_primary(queue, parent, err);
+	return __ft_syscall_accept_primary(queue, parent, err, newsk);
 }
 
-struct sock *ft_syscall_accept(struct request_sock_queue *queue, struct sock *parent, int flags, int* err){
-	struct sock* ret;
+int ft_syscall_accept_after(struct request_sock_queue *queue, struct sock *parent, int flags, int* err, struct sock **newsk){
 	
 	if(ft_is_replicated(current)){
 
-                if( ft_is_primary_replica(current) ){
-			ret= ft_syscall_accept_primary(queue, parent, err);
-			return ret;
+                if( ft_is_primary_replica(current) || ft_is_primary_after_secondary_replica(current)){
+			return ft_syscall_accept_primary_after(queue, parent, err, newsk);
 		}
 		else{
 			if( ft_is_secondary_replica(current) ){
-				ret= ft_syscall_accept_secondary(queue, parent, flags, err);
-				if(ret==NULL)
-	                                printk("WARNING accept secondary returned null err is %d\n", *err);
-				return ret;
+				printk("ERROR %s called by secondary replica\n", __func__);
+				return -EFAULT;
 			}
 			else{
-				if(!ft_is_primary_after_secondary_replica(current)){
-					printk("ERROR: %s current (pid %d) is not primary, secondary or primary_after_secondary replica \n", __func__, current->pid);
-					return NULL;
-				}
-				else
-					ret= ft_syscall_accept_primary_after_secondary(queue, parent, flags, err);
-
-					if(ret==NULL)
-                                        	printk("WARNING accept primary after secondary returned null err is %d\n", *err);
-					return ret;
+				printk("ERROR: %s current (pid %d) is not primary, secondary or primary_after_secondary replica \n", __func__, current->pid);
+				return -EFAULT;
 			}
 		}
 
         }
         else{
-                return reqsk_queue_get_child(queue, parent);
+                *newsk= reqsk_queue_get_child(queue, parent);
+		return FT_SYSCALL_CONTINUE;
+        }
+
+
+}
+
+int ft_syscall_accept_before(struct request_sock_queue *queue, struct sock *parent, int flags, int* err, struct sock **newsk){
+	
+	if(ft_is_replicated(current)){
+
+                if( ft_is_primary_replica(current) ){
+			return FT_SYSCALL_CONTINUE;
+		}
+		else{
+			if( ft_is_secondary_replica(current) ){
+				return ft_syscall_accept_secondary_before(queue, parent, flags, err, newsk);
+			}
+			else{
+				if(!ft_is_primary_after_secondary_replica(current)){
+					printk("ERROR: %s current (pid %d) is not primary, secondary or primary_after_secondary replica \n", __func__, current->pid);
+					return -EFAULT;
+				}
+				else
+					return ft_syscall_accept_primary_after_secondary_before(queue, parent, flags, err, newsk);
+
+			}
+		}
+
+        }
+        else{
+                return FT_SYSCALL_CONTINUE;
         }
 
 
