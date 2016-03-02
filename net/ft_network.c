@@ -55,11 +55,52 @@ struct rcv_fam_info{
 };
 
 struct accept_info{
+	int error;
 	__be32	daddr;
 	__be16	dport;
 };
 
-static int __ft_syscall_accept_primary(struct request_sock_queue *queue, struct sock *parent, int* err, struct sock **newsk){
+extern int inet_csk_wait_for_connect(struct sock *sk, long timeo);
+static int ft_syscall_accept_primary_before(struct request_sock_queue *queue, struct sock *sk,  int flags, int* err, struct sock **newsk){
+	int error;
+	struct accept_info *sys_info;
+
+ 	/* Find already established connection */
+        if (reqsk_queue_empty(queue)) {
+                long timeo = sock_rcvtimeo(sk, flags & O_NONBLOCK);
+                                
+                /* If this is a non blocking socket don't sleep */
+                error = -EAGAIN;        
+                if (!timeo)     
+                        goto out_err;
+                                        
+                error = inet_csk_wait_for_connect(sk, timeo);
+                        
+                if (error)
+                        goto out_err;
+        }
+	return FT_SYSCALL_CONTINUE;
+
+out_err:
+	if(is_there_any_secondary_replica(current->ft_popcorn)){
+                sys_info= kmalloc(sizeof(*sys_info), GFP_ATOMIC);
+                if(!sys_info){
+                        printk("ERROR %s impossible to malloc\n", __func__);
+                        *err= -ENOMEM;
+                        return *err;
+                }
+		
+		sys_info->error= error;
+
+                ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) sys_info, sizeof(*sys_info));
+                kfree(sys_info);
+        }
+
+	return error;      
+
+}
+
+static int __ft_syscall_accept_primary_after(struct request_sock_queue *queue, struct sock *parent, int* err, struct sock **newsk){
 	struct sock* ret= reqsk_queue_get_child(queue, parent);
 	struct accept_info *sys_info;
 
@@ -71,6 +112,7 @@ static int __ft_syscall_accept_primary(struct request_sock_queue *queue, struct 
 			return *err;
 		}
 
+		sys_info->error= 0;
 		sys_info->daddr= inet_sk(ret)->inet_daddr;
 		sys_info->dport= inet_sk(ret)->inet_dport;
 
@@ -160,6 +202,12 @@ static int ft_syscall_accept_primary_after_secondary_before(struct request_sock_
 
 	syscall_info_primary= (struct accept_info *) ft_get_pending_syscall_info(&current->ft_pid, current->id_syscall);
         if(syscall_info_primary){
+		if(syscall_info_primary->error){
+			*err =syscall_info_primary->error;
+			kfree(syscall_info_primary);
+			return *err;
+		}
+			
 		addr= syscall_info_primary->daddr;
         	port= syscall_info_primary->dport;
 
@@ -169,7 +217,7 @@ static int ft_syscall_accept_primary_after_secondary_before(struct request_sock_
 	}
 	else{
         	disable_det_sched(current);
-		return FT_SYSCALL_CONTINUE;
+		return ft_syscall_accept_primary_before(queue, parent, flags, err, newsk);
 	}
 }
 
@@ -187,6 +235,12 @@ static int ft_syscall_accept_secondary_before(struct request_sock_queue *queue, 
                 return ft_syscall_accept_primary_after_secondary_before(queue, parent, flags, err, newsk);
         }
 
+	if(syscall_info_primary->error){
+		*err= syscall_info_primary->error;
+		kfree(syscall_info_primary);
+		return *err;
+	}
+
 	addr= syscall_info_primary->daddr;
 	port= syscall_info_primary->dport;
 	
@@ -197,7 +251,7 @@ static int ft_syscall_accept_secondary_before(struct request_sock_queue *queue, 
 
 static int ft_syscall_accept_primary_after(struct request_sock_queue *queue, struct sock *parent, int* err,  struct sock **newsk){
 	
-	return __ft_syscall_accept_primary(queue, parent, err, newsk);
+	return __ft_syscall_accept_primary_after(queue, parent, err, newsk);
 }
 
 int ft_syscall_accept_after(struct request_sock_queue *queue, struct sock *parent, int flags, int* err, struct sock **newsk){
@@ -232,7 +286,7 @@ int ft_syscall_accept_before(struct request_sock_queue *queue, struct sock *pare
 	if(ft_is_replicated(current)){
 
                 if( ft_is_primary_replica(current) ){
-			return FT_SYSCALL_CONTINUE;
+			return ft_syscall_accept_primary_before(queue, parent, flags, err, newsk);
 		}
 		else{
 			if( ft_is_secondary_replica(current) ){

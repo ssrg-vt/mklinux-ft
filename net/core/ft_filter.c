@@ -3256,8 +3256,8 @@ static void dispatch_handshake_msg(struct work_struct* work){
 
 		if(got_filter){
 			if(!(filter->type & FT_FILTER_FAKE)){
-				trace_printk("ERROR %s found a filter port %d\n", __func__,  ntohs(my_work->port));
-				printk("ERROR %s found a filter port %d\n", __func__,  ntohs(my_work->port));
+				trace_printk("ERROR %s found a fake filter port %d\n", __func__,  ntohs(my_work->port));
+				printk("ERROR %s found a fake filter port %d\n", __func__,  ntohs(my_work->port));
 				put_ft_filter(filter);
                         	goto out;
 			}
@@ -3425,7 +3425,8 @@ check_ack:
 		not_injected++;
                 if(not_injected>5){
                         printk("ERROR %s ack packet refused more than 5 times port %d\n", __func__, htons(my_work->port));
-                        put_ft_filter(filter);
+                        if(filter)
+				put_ft_filter(filter);
 			goto out;
                 }
 		if(!my_work->ack_msg){
@@ -3437,7 +3438,8 @@ check_ack:
                 skb= create_skb_from_rx_copy_msg(my_work->ack_msg, listen_filter);
                 if(IS_ERR(skb)){
                         printk("ERROR %s impossible to create skb\n", __func__);
-                        put_ft_filter(filter);
+                        if(filter)
+				put_ft_filter(filter);
 			goto out;
                 }
 	
@@ -3985,8 +3987,6 @@ struct request_sock *ft_reqsk_queue_find_remove(struct request_sock_queue *queue
         struct request_sock *req= queue->rskq_accept_head;
         struct inet_request_sock * inet_req;
 
-        WARN_ON(req == NULL);
-
         while(req){
                 inet_req= (struct inet_request_sock *)req;
                 if( inet_req->rmt_addr==daddr && inet_req->rmt_port==dport )
@@ -4013,8 +4013,6 @@ struct request_sock *ft_reqsk_queue_find(struct request_sock_queue *queue, __be3
 {
         struct request_sock *req= queue->rskq_accept_head;
         struct inet_request_sock * inet_req;
-
-        WARN_ON(req == NULL);
 
         while(req){
                 inet_req= (struct inet_request_sock *)req;
@@ -5897,7 +5895,7 @@ unsigned int ft_hook_before_tcp_primary_after_secondary(struct sk_buff *skb, str
 
 			if(TCP_SKB_CB(skb)->end_seq -tcp_header->syn -tcp_header->fin <= get_last_byte_received_stable_buffer(filter->stable_buffer)+1){
 				//send_ack(sk, TCP_SKB_CB(skb)->ack_seq + filter->idelta_seq, TCP_SKB_CB(skb)->end_seq -tcp_header->syn -tcp_header->fin + filter->odelta_seq, 65535U);
-				//trace_printk("sending ack\n");
+				trace_printk("sending ack port %d\n",  ntohs(tcp_header->source));
 				send_ack(sk, get_oseq_in(filter, TCP_SKB_CB(skb)->ack_seq), get_iseq_in(filter, TCP_SKB_CB(skb)->end_seq -tcp_header->syn -tcp_header->fin), 65535U);
 								
 			}
@@ -6683,7 +6681,7 @@ unsigned int ft_hook_after_transport_layer_primary_after_secondary(struct net_fi
 	struct sock *sk;
 	char *filter_id_printed;
 	struct handshake_work *hand_work;
-	u32 max_ack;
+	u32 max_ack, size;
 
         sk= filter->ft_sock;
 
@@ -6711,7 +6709,10 @@ unsigned int ft_hook_after_transport_layer_primary_after_secondary(struct net_fi
 		tcp_header = tcp_hdr(skb);
 		iph= ip_hdr(skb);
 
-		trace_printk("before: syn %u ack %u fin %u seq %u ack_seq %u port %d\n", tcp_header->syn, tcp_header->ack, tcp_header->fin, ntohl(tcp_header->seq), ntohl( tcp_header->ack_seq), ntohs(filter->tcp_param.dport));
+	
+        	size= TCP_SKB_CB(skb)->end_seq-TCP_SKB_CB(skb)->seq;
+
+		trace_printk("before: syn %u ack %u fin %u seq %u ack_seq %u size %u port %d\n", tcp_header->syn, tcp_header->ack, tcp_header->fin, ntohl(tcp_header->seq), ntohl( tcp_header->ack_seq), size, ntohs(filter->tcp_param.dport));
 
 		//trace_printk("%s filter->odelta_seq %u filter->idelta_seq %u\n", __func__, filter->odelta_seq, filter->idelta_seq);
 
@@ -6725,7 +6726,9 @@ unsigned int ft_hook_after_transport_layer_primary_after_secondary(struct net_fi
 			tcp_header->window= htons(20440);	
 		}
 		*/	
-		
+		if(size>1460){
+			trace_printk("WARNING size is %u port %d\n called by: %pS\n%pS\n%pS\n%pS\n%pS\n", size, ntohs(filter->tcp_param.dport), __builtin_return_address(3),__builtin_return_address(4),__builtin_return_address(5),__builtin_return_address(6),__builtin_return_address(7));
+		}
 		//recompute checksum
 		tcp_header->check = 0;
 		tcp_header->check= checksum_tcp_tx(skb, skb->len - ip_hdrlen(skb), iph, tcp_header);
