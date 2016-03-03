@@ -116,7 +116,6 @@ SYSCALL_DEFINE2(gettimeofday, struct timeval __user *, tv,
 	long ret;
 	if(ft_is_replicated(current)){	
        		ret = ft_gettimeofday(tv,tz);
-			printk("%d time %d\n", smp_processor_id(), tv->tv_sec);
 			return ret;
 	}
 #endif

@@ -226,7 +226,14 @@ static inline int update_token(struct popcorn_namespace *ns)
 				 objPtr->task->current_syscall == __NR_recvfrom ||
 				 objPtr->task->current_syscall == __NR_recvmsg ||
 				 objPtr->task->current_syscall == __NR_write ||
+				 objPtr->task->current_syscall == __NR_writev ||
+				 objPtr->task->current_syscall == __NR_readv ||
+				 objPtr->task->current_syscall == __NR_preadv ||
+				 objPtr->task->current_syscall == __NR_pwritev ||
+				 objPtr->task->current_syscall == __NR_pread64 ||
+				 objPtr->task->current_syscall == __NR_pwrite64 ||
 				 objPtr->task->current_syscall == __NR_accept ||
+				 objPtr->task->current_syscall == __NR_accept4 ||
 				 objPtr->task->current_syscall == __NR_time ||
 				 objPtr->task->current_syscall == __NR_poll ||
 				 objPtr->task->current_syscall == __NR_epoll_wait ||

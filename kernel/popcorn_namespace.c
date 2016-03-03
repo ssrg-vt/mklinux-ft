@@ -269,6 +269,7 @@ int det_shepherd(void *data)
 				 token->task->current_syscall == __NR_recvmsg ||
 				 token->task->current_syscall == __NR_write ||
 				 token->task->current_syscall == __NR_accept ||
+				 token->task->current_syscall == __NR_accept4 ||
 				 token->task->current_syscall == __NR_poll ||
 				 token->task->current_syscall == __NR_epoll_wait ||
 				 token->task->current_syscall == __NR_socket)) {
