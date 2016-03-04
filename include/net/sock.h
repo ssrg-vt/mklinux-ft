@@ -62,7 +62,6 @@
 #include <linux/atomic.h>
 #include <net/dst.h>
 #include <net/checksum.h>
-
 /*
  * This structure really needs to be cleaned up.
  * Most of it is for TCP, and not used by any of
@@ -1395,7 +1394,15 @@ extern struct dst_entry *sk_dst_check(struct sock *sk, u32 cookie);
 
 static inline int sk_can_gso(const struct sock *sk)
 {
+#ifdef FT_POPCORN
+	if(sk->ft_filter){
+		return 0;
+	}
+	else
+		return net_gso_ok(sk->sk_route_caps, sk->sk_gso_type);
+#else
 	return net_gso_ok(sk->sk_route_caps, sk->sk_gso_type);
+#endif
 }
 
 extern void sk_setup_caps(struct sock *sk, struct dst_entry *dst);

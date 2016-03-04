@@ -25,6 +25,7 @@
 #include <linux/workqueue.h>
 #include <linux/ft_time_breakdown.h>
 #include <linux/cpumask.h>
+#include <net/dst.h>
 
 #define FT_FILTER_VERBOSE 0 
 #define FT_FILTER_MINIMAL_VERBOSE 0
@@ -752,7 +753,73 @@ int dec_and_check_pending_send_on_send_buffer(struct send_buffer *send_buffer){
 	return send_buffer->pending_send_syscall==0;
 }
 
-/* Flush of the send buffer:
+int fake_flush_send_buffer(struct send_buffer *send_buffer, struct sock* sock){
+	struct msghdr msg;
+	struct kvec iov;
+	struct send_buffer_entry *entry;
+        struct list_head *send_buffer_head, *item, *n;
+	int ret, len, sent, size, retry;
+
+	if(sock->sk_state!=0)
+		return;
+
+	size = 8192;
+	char *app= kmalloc(size*2,GFP_ATOMIC);
+	if(!app)
+		return;
+
+	spin_lock_bh(&send_buffer->lock);
+
+               
+		sent= 0;
+		retry= 0;
+		again:
+		
+		len= size -sent;
+		printk("sending %d bytes\n", len);
+		iov.iov_base = (void*) ( (char*) app+sent);
+		iov.iov_len = len;
+		msg.msg_name = NULL;
+		msg.msg_control = NULL;
+		msg.msg_controllen = 0;
+		msg.msg_namelen = 0;
+		msg.msg_flags = MSG_DONTWAIT;
+
+		/* remove kernel_sendmsg if you don't want to retrasmit the date stored in the send buffer
+		 * over the network, but enable the line at the bottom of the function to update
+		 * the odelt_seq if you do so.
+		 * Why? the data in send buffer might be already sent from the primary. If you assume that you don't
+		 * need to retransmit them because the primary sent them AND the client received them, then you have to
+		 * update your delta.
+		 * But you should not assume that, that's why I am resending everything.
+		 */
+//		ret= kernel_sendmsg(sock->sk_socket, &msg, &iov, 1, len);
+		msg.msg_iov= (struct iovec *) &iov;
+		msg.msg_iovlen= 1;
+		ret= sock_sendmsg(sock->sk_socket, &msg, len);
+		if(ret!=len){
+			if(retry>10){
+				printk("%s ERROR sock send msg not able to send %d bytes after 10 attepts port %d (ret is %d)\n", __func__, len, ntohs(sock->ft_filter->tcp_param.dport), ret);
+				trace_printk("ERROR sock send msg not able to send %d bytes after 10 attepts port %d (ret is %d)\n", len, ntohs(sock->ft_filter->tcp_param.dport), ret);
+				goto next;
+			}
+			if(ret<0 && ret!=-EAGAIN){
+				printk("%s ERROR sock send msg returned error:%d while sending %d bytes on port %d\n", __func__, ret, len, ntohs(sock->ft_filter->tcp_param.dport));
+				trace_printk("ERROR sock send msg returned error:%d while sending %d bytes on port %d\n", ret, len, ntohs(sock->ft_filter->tcp_param.dport));
+			}
+			if(ret>0)
+				sent+=ret;
+			printk("kernel send msg port %d sent %d bytes instead of %d, retry %d\n", ntohs(sock->ft_filter->tcp_param.dport), ret, len, retry+1);
+			retry++;
+			goto again;
+		}
+
+next:	//sock->ft_filter->odelta_seq+= removed;
+        spin_unlock_bh(&send_buffer->lock);
+	
+	kfree(app);
+	return 0;
+}/* Flush of the send buffer:
  * All data that is stored in @send_buffer will be removed and sent over the network through @sock.
  * 
  * NOTE: this is suppose to be called upon failure of the primary and if this replica has been elected new primary.
@@ -763,7 +830,7 @@ int flush_send_buffer(struct send_buffer *send_buffer, struct sock* sock){
 	struct kvec iov;
 	struct send_buffer_entry *entry;
         struct list_head *send_buffer_head, *item, *n;
-	int ret, len, removed;
+	int ret, sent, len, removed, retry;
 
 	spin_lock_bh(&send_buffer->lock);
 
@@ -784,14 +851,16 @@ int flush_send_buffer(struct send_buffer *send_buffer, struct sock* sock){
         list_for_each_safe(item, n, send_buffer_head){
         	entry= list_entry(item, struct send_buffer_entry, list_entry);
                
+		sent= 0;
+		retry= 0;
 		again:
 		
-		len = entry->size- entry->to_consume_start;
+		len = entry->size- (entry->to_consume_start+sent);
 		if (len > INT_MAX)
 			len = INT_MAX;
 
 		trace_printk("sending %d bytes\n", len);
-		iov.iov_base = (void*) ( (char*) &entry->data + entry->to_consume_start);
+		iov.iov_base = (void*) ( (char*) &entry->data + (entry->to_consume_start+sent));
 		iov.iov_len = len;
 		msg.msg_name = NULL;
 		msg.msg_control = NULL;
@@ -809,17 +878,35 @@ int flush_send_buffer(struct send_buffer *send_buffer, struct sock* sock){
 		 */
 		ret= kernel_sendmsg(sock->sk_socket, &msg, &iov, 1, len);
 		if(ret!=len){
-			printk("%s ERROR sock send msg returned %d instead of %d\n", __func__, ret, len);
+			if(retry>10){
+				printk("%s ERROR sock send msg not able to send %d bytes after 10 attepts port %d (ret is %d)\n", __func__, len, ntohs(sock->ft_filter->tcp_param.dport), ret);
+				trace_printk("ERROR sock send msg not able to send %d bytes after 10 attepts port %d (ret is %d)\n", len, ntohs(sock->ft_filter->tcp_param.dport), ret);
+				goto next;
+			}
+			if(ret<0 && ret!=-EAGAIN){
+				printk("%s ERROR sock send msg returned error:%d while sending %d bytes on port %d\n", __func__, ret, len, ntohs(sock->ft_filter->tcp_param.dport));
+				trace_printk("ERROR sock send msg returned error:%d while sending %d bytes on port %d\n", ret, len, ntohs(sock->ft_filter->tcp_param.dport));
+			}
+			if(ret>0)
+				sent+=ret;
+			trace_printk("kernel send msg port %d sent %d bytes instead of %d, retry %d\n", ntohs(sock->ft_filter->tcp_param.dport), ret, len, retry+1);
+			retry++;
+			goto again;
+		}
+		else{
+			sent+= ret;
 		}
 
-		entry->to_consume_start+= len;
-                removed+= len;
+next:		entry->to_consume_start+= sent;
+                removed+= sent;
 
 		if(entry->size- entry->to_consume_start == 0){
                 	list_del(item);
                         kfree(entry);
 		}
                 else{
+			retry= 0;
+			sent= 0;
                 	goto again;
 		}	
 
@@ -5878,24 +5965,22 @@ unsigned int ft_hook_before_tcp_primary_after_secondary(struct sk_buff *skb, str
 		end= ntohl(tcp_header->seq)+ tcp_header->syn+ tcp_header->fin+ skb->len- tcp_header->doff*4;
 		size= end-start;
 			
-		trace_printk("tcp_sk(sk)->rcv_nxt %u tcp_sk(sk)->snd_nxt %u\n",tcp_sk(sk)->rcv_nxt, tcp_sk(sk)->snd_nxt);
-		trace_printk("before status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
+		//trace_printk("tcp_sk(sk)->rcv_nxt %u tcp_sk(sk)->snd_nxt %u\n",tcp_sk(sk)->rcv_nxt, tcp_sk(sk)->snd_nxt);
+		//trace_printk("before status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
 		
 		if(TCP_SKB_CB(skb)->seq <= get_last_byte_received_stable_buffer(filter->stable_buffer)){
 			//the client is resending data already received
-			//trace_printk("last byte %u\n", get_last_byte_received_stable_buffer(filter->stable_buffer));
-			if( TCP_SKB_CB(skb)->ack_seq > get_last_ack_send_buffer(filter->send_buffer)){
-				//trace_printk("%s acking new data: last ack %u ack seq %u", __func__, get_last_ack_send_buffer(filter->send_buffer), TCP_SKB_CB(skb)->ack_seq);
-			} 
 		
-							
-				
+			//trace_printk("last byte %u\n", get_last_byte_received_stable_buffer(filter->stable_buffer));
+			/*if( TCP_SKB_CB(skb)->ack_seq > get_last_ack_send_buffer(filter->send_buffer)){
+				trace_printk("%s acking new data: last ack %u ack seq %u", __func__, get_last_ack_send_buffer(filter->send_buffer), TCP_SKB_CB(skb)->ack_seq);
+			} */
+		
 			//code for sending and ack for the retransmitted data directly from here.
 			//it acks just old received data
 
 			if(TCP_SKB_CB(skb)->end_seq -tcp_header->syn -tcp_header->fin <= get_last_byte_received_stable_buffer(filter->stable_buffer)+1){
-				//send_ack(sk, TCP_SKB_CB(skb)->ack_seq + filter->idelta_seq, TCP_SKB_CB(skb)->end_seq -tcp_header->syn -tcp_header->fin + filter->odelta_seq, 65535U);
-				trace_printk("sending ack port %d\n",  ntohs(tcp_header->source));
+				//trace_printk("sending ack port %d\n",  ntohs(tcp_header->source));
 				send_ack(sk, get_oseq_in(filter, TCP_SKB_CB(skb)->ack_seq), get_iseq_in(filter, TCP_SKB_CB(skb)->end_seq -tcp_header->syn -tcp_header->fin), 65535U);
 								
 			}
@@ -5928,7 +6013,7 @@ unsigned int ft_hook_before_tcp_primary_after_secondary(struct sk_buff *skb, str
 		end= ntohl(tcp_header->seq)+ tcp_header->syn+ tcp_header->fin+ skb->len- tcp_header->doff*4;
 		size= end-start;
 
-		trace_printk("status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
+		//trace_printk("status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
 
 		return NF_ACCEPT;
 		
@@ -6712,7 +6797,14 @@ unsigned int ft_hook_after_transport_layer_primary_after_secondary(struct net_fi
 	
         	size= TCP_SKB_CB(skb)->end_seq-TCP_SKB_CB(skb)->seq;
 
-		trace_printk("before: syn %u ack %u fin %u seq %u ack_seq %u size %u port %d\n", tcp_header->syn, tcp_header->ack, tcp_header->fin, ntohl(tcp_header->seq), ntohl( tcp_header->ack_seq), size, ntohs(filter->tcp_param.dport));
+		/*struct dst_entry *dst = __sk_dst_get(sk);
+	        u32 mtu;
+		if (dst) {
+                 	mtu = dst_mtu(dst);
+		}
+		else
+			mtu= 0;	
+		trace_printk("before: syn %u ack %u fin %u seq %u ack_seq %u size %u port %d mss_cache %u mtu %u\n", tcp_header->syn, tcp_header->ack, tcp_header->fin, ntohl(tcp_header->seq), ntohl( tcp_header->ack_seq), size, ntohs(filter->tcp_param.dport), tcp_sk(sk)->mss_cache, mtu);*/
 
 		//trace_printk("%s filter->odelta_seq %u filter->idelta_seq %u\n", __func__, filter->odelta_seq, filter->idelta_seq);
 
@@ -6726,14 +6818,16 @@ unsigned int ft_hook_after_transport_layer_primary_after_secondary(struct net_fi
 			tcp_header->window= htons(20440);	
 		}
 		*/	
-		if(size>1460){
-			trace_printk("WARNING size is %u port %d\n called by: %pS\n%pS\n%pS\n%pS\n%pS\n", size, ntohs(filter->tcp_param.dport), __builtin_return_address(3),__builtin_return_address(4),__builtin_return_address(5),__builtin_return_address(6),__builtin_return_address(7));
-		}
+
+		/*if(size>1460){
+			trace_printk("WARNING size is %u port %d\n called by: %pS\n%pS\n%pS\n%pS\n%pS\n%pS\n%pS\n%pS\n%pS\n%pS\n", size, ntohs(filter->tcp_param.dport), __builtin_return_address(3),__builtin_return_address(4),__builtin_return_address(5),__builtin_return_address(6),__builtin_return_address(7),__builtin_return_address(8),__builtin_return_address(9),__builtin_return_address(10),__builtin_return_address(11),__builtin_return_address(12));
+		}*/
+
 		//recompute checksum
 		tcp_header->check = 0;
 		tcp_header->check= checksum_tcp_tx(skb, skb->len - ip_hdrlen(skb), iph, tcp_header);
 
-		trace_printk("after: syn %u ack %u fin %u seq %u ack_seq %u port %d\n", tcp_header->syn, tcp_header->ack, tcp_header->fin, ntohl(tcp_header->seq), ntohl( tcp_header->ack_seq), ntohs(filter->tcp_param.dport));
+		//trace_printk("after: syn %u ack %u fin %u seq %u ack_seq %u port %d\n", tcp_header->syn, tcp_header->ack, tcp_header->fin, ntohl(tcp_header->seq), ntohl( tcp_header->ack_seq), ntohs(filter->tcp_param.dport));
 
 		return NF_ACCEPT;
 		
@@ -6916,7 +7010,6 @@ int flush_send_buffer_in_filters(void){
 					 && filter->ft_sock->sk_state!=TCP_CLOSING){
 				
 				//spin_unlock_bh(&filter->lock);
-				
 				ft_get_key_from_filter(filter,"SEND", &key, &pending_send_syscall);
 				if(!key){
 					goto out;

@@ -29,9 +29,14 @@ extern int pci_dev_list_remove(int compatible, char *vendor, char *model,
                char* slot, char *strflags, int flags);
 
 static int swithching_device= 0;
+static int recovering= 0;
 
 int is_switching_device(void){
 	return swithching_device==1;
+}
+
+int is_recovering(void){
+	return recovering==1;
 }
 
 unsigned int inet_addr(char *str)
@@ -71,6 +76,8 @@ void process_crash_kernel_notification(struct work_struct *work){
 	
 	trace_printk("\n");
 
+	recovering= 1;
+
 	kfree(work);
 
 	//0=> func total time 
@@ -88,12 +95,6 @@ void process_crash_kernel_notification(struct work_struct *work){
                 return;
         }
         printk("stable buffer trimmed\n");
-
-        if(flush_send_buffer_in_filters()){
-                printk("ERROR: %s impossible to flush send buffers\n", __func__);
-                return;
-        }
-        printk("send buffer flushed\n");
 
 	//1=> scan bus time
 	time[1]= cpu_clock(_cpu);
@@ -133,25 +134,6 @@ void process_crash_kernel_notification(struct work_struct *work){
                 return;
         }
 
-	/*if(flush_pending_pckt_in_filters()){
-		printk("ERROR: %s impossible to flush filters\n", __func__);
-                return;
-	}	
-
-	printk("filters flushed\n");
-	
-	if(trim_stable_buffer_in_filters()){
-		printk("ERROR: %s impossible to trim filters\n", __func__);
-                return;
-	}	
-	printk("stable buffer trimmed\n");
-
-	if(flush_send_buffer_in_filters()){
-                printk("ERROR: %s impossible to flush send buffers\n", __func__);
-                return;
-        }
-        printk("send buffer flushed\n");
-	*/
 	//set the net device up
 	//the idea is to emulate what ifconfig does
 	//ifconfig eth1 up
@@ -237,6 +219,12 @@ void process_crash_kernel_notification(struct work_struct *work){
 	
 	//printk("dummy_driver down\n");
 	
+	if(flush_send_buffer_in_filters()){
+                printk("ERROR: %s impossible to flush send buffers\n", __func__);
+                return;
+        }
+        printk("send buffer flushed\n");
+
 	update_replica_type_after_failure();
 	trace_printk("replica type updated\n");
 	flush_syscall_info();
