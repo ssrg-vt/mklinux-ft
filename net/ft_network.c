@@ -977,7 +977,18 @@ static int before_syscall_send_family_primary_after_secondary(struct kiocb *iocb
         int iovlen, err;
         __wsum my_csum;
 
+check_flush:	lock_send_buffer_to_exclude_flushing(sock->sk->ft_filter->send_buffer);
+
+	if(is_send_buffer_flushing(sock->sk->ft_filter->send_buffer)){
+		unlock_send_buffer_to_exclude_flushing(sock->sk->ft_filter->send_buffer);
+		msleep(300);
+		goto check_flush;
+	}	
+
 	//trace_printk("port %d\n", ntohs(sock->sk->ft_filter->tcp_param.dport));
+	
+	unlock_send_buffer_to_exclude_flushing(sock->sk->ft_filter->send_buffer);
+
 	syscall_info_primary= (struct send_fam_info *) ft_get_pending_syscall_info(&current->ft_pid, current->id_syscall);
         if(syscall_info_primary){
 		//trace_printk("data from primary\n");
@@ -985,27 +996,6 @@ static int before_syscall_send_family_primary_after_secondary(struct kiocb *iocb
 			printk("ERROR: %s for pid %d size of send (syscall id %d) not matching between primary(%d) and secondary(%d)\n", __func__, current->pid, current->id_syscall, syscall_info_primary->size, (int) size);
 			goto out;
 		}
-
-		/*my_csum= 0;
-
-		#if ENABLE_CHECKSUM
-		iovlen = msg->msg_iovlen;
-		iov = msg->msg_iov;
-
-		for(i=0; i< iovlen; i++){
-                        char* app= kmalloc(iov[i].iov_len +1, GFP_KERNEL);
-                        my_csum= csum_and_copy_from_user(iov[i].iov_base, (void*)app, iov[i].iov_len, my_csum, &err);
-                        if(err){
-                                printk("ERROR: %s copy_from_user failed\n", __func__);
-                                kfree(app);
-                                goto out;
-                        }
-                        app[iov[i].iov_len]='\0';
-                        FTPRINTK("%s: data %s\n",__func__,app);
-                        kfree(app);
-                }
-		#endif
-		*/
 
 		my_csum= 0;
         	iovlen = msg->msg_iovlen;
@@ -1026,11 +1016,13 @@ static int before_syscall_send_family_primary_after_secondary(struct kiocb *iocb
 
 		kfree(syscall_info_primary);
 
-		if(!is_send_buffer_flushed(sock->sk->ft_filter->send_buffer)){
+		if(is_send_buffer_to_flush(sock->sk->ft_filter->send_buffer)){
+			lock_send_buffer_for_flushing(sock->sk->ft_filter->send_buffer);
 			if(dec_and_check_pending_send_on_send_buffer(sock->sk->ft_filter->send_buffer)){
         			//trace_printk("flushing send buffer of port %d\n", ntohs(sock->sk->ft_filter->tcp_param.dport));
-	                	flush_send_buffer(sock->sk->ft_filter->send_buffer, sock->sk);
+	                	flush_send_buffer(sock->sk->ft_filter->send_buffer, sock->sk, 1);
                 	}
+			unlock_send_buffer_for_flushing(sock->sk->ft_filter->send_buffer);
 		}
 
 		return FT_SYSCALL_DROP;
@@ -1054,8 +1046,11 @@ static int before_syscall_send_family_secondary(struct kiocb *iocb, struct socke
 
 	//trace_printk("syscall_id %d size %d on port %d\n", current->id_syscall, (int) size, ntohs(sock->sk->ft_filter->tcp_param.dport));
 
+	lock_send_buffer_to_exclude_flushing(sock->sk->ft_filter->send_buffer);
+
 	sycall_info_primary= (struct send_fam_info *) ft_wait_for_syscall_info(&current->ft_pid, current->id_syscall);
 	if(!sycall_info_primary){
+		unlock_send_buffer_to_exclude_flushing(sock->sk->ft_filter->send_buffer);
 		//trace_printk("changing to primary after secondary\n");
 		return before_syscall_send_family_primary_after_secondary(iocb, sock, msg, size, ret);
 	}
@@ -1080,6 +1075,18 @@ static int before_syscall_send_family_secondary(struct kiocb *iocb, struct socke
 	}
 
 out:
+
+	unlock_send_buffer_to_exclude_flushing(sock->sk->ft_filter->send_buffer);			
+	if(is_send_buffer_to_flush(sock->sk->ft_filter->send_buffer)){
+		lock_send_buffer_for_flushing(sock->sk->ft_filter->send_buffer);
+		if(dec_and_check_pending_send_on_send_buffer(sock->sk->ft_filter->send_buffer)){
+			//trace_printk("flushing send buffer of port %d\n", ntohs(sock->sk->ft_filter->tcp_param.dport));
+			flush_send_buffer(sock->sk->ft_filter->send_buffer, sock->sk, 1);
+		}
+		unlock_send_buffer_for_flushing(sock->sk->ft_filter->send_buffer);
+	}
+
+
 	*ret= sycall_info_primary->ret;
 
 	kfree(sycall_info_primary);

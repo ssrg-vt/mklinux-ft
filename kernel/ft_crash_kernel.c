@@ -300,6 +300,8 @@ static void hang_cpu(void){
  	asm volatile("hlt": : :"memory"); 
 }
 
+extern void print_net_statistics(void);
+
 asmlinkage long sys_ft_crash_kernel(void)
 {
        	if(ft_is_replicated(current)){
@@ -309,6 +311,7 @@ asmlinkage long sys_ft_crash_kernel(void)
 			//send message to all kernel to notify them that this one is crashing
 			//this should be automatically detected from other kernels using heartbeat
 			smp_send_stop();
+			print_net_statistics();
 			send_crash_kernel_msg();
 			//send_zero_window_in_filters();
 			//hang the cpu (for now I am assuming the kernel is running on a single core

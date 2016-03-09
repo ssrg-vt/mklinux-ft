@@ -251,6 +251,7 @@ void* ft_get_pending_syscall_info(struct ft_pid *pri_after_sec, int id_syscall);
 void ft_get_key_from_filter(struct net_filter_info *filter, const char* pre_append, char **key, int*key_size);
 int ft_are_syscall_extra_key_present(char * key);
 int flush_syscall_info(void);
+int ft_check_and_set_syscall_extra_key(char * key, int *extra_syscall);
 
 struct timeval;
 struct timezone;
@@ -275,9 +276,14 @@ int is_stable_buffer_empty(struct stable_buffer *stable_buffer);
 int trim_stable_buffer_in_filters(void);
 int flush_send_buffer_in_filters(void);
 int dec_and_check_pending_send_on_send_buffer(struct send_buffer *send_buffer);
-int flush_send_buffer(struct send_buffer *send_buffer, struct sock* sock);
+int flush_send_buffer(struct send_buffer *send_buffer, struct sock* sock, int blocking);
 int is_send_buffer_flushed(struct send_buffer *send_buffer);
 int is_send_buffer_flushing(struct send_buffer *send_buffer);
+int is_send_buffer_to_flush(struct send_buffer *send_buffer);
+void lock_send_buffer_for_flushing(struct send_buffer *send_buffer);
+void unlock_send_buffer_for_flushing(struct send_buffer *send_buffer);
+void lock_send_buffer_to_exclude_flushing(struct send_buffer *send_buffer);
+void unlock_send_buffer_to_exclude_flushing(struct send_buffer *send_buffer);
 int send_zero_window_in_filters(void);
 
 //int ft_poll_secondary(struct pollfd __user *events);

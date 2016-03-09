@@ -757,6 +757,37 @@ out:
 
 }
 
+int ft_check_and_set_syscall_extra_key(char * key, int *extra_syscall){
+	int ret= 0, i;
+        list_entry_t *head, *app;
+        struct wait_syscall* wait_info;
+
+        spin_lock(&syscall_hash->spinlock);
+
+        for(i=0; i<syscall_hash->size; i++){
+                head= syscall_hash->table[i];
+                if(head){
+			list_for_each_entry(app, &head->list, list){
+				if(!app->obj){
+					ret= -EFAULT;
+					printk("ERROR: %s no obj field\n", __func__);
+					goto out;
+				}
+				wait_info= (struct wait_syscall*) app->obj;
+				if(wait_info->extra_key && (strcmp(wait_info->extra_key, key)==0)){
+					ret++;
+				}
+			}
+                }
+        }
+
+out:
+	*extra_syscall= ret;
+        spin_unlock(&syscall_hash->spinlock);
+	return ret;
+
+}
+
 /* Flush any pending syscall info still to be consumed by worker thread
  * and wake up all primary_after_secondary replicas that are waiting for a syscall info.
  * NOTE: this is supposed to be called after update_replica_type_after_failure.

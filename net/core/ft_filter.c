@@ -26,6 +26,7 @@
 #include <linux/ft_time_breakdown.h>
 #include <linux/cpumask.h>
 #include <net/dst.h>
+#include <linux/rwlock_types.h>
 
 #define FT_FILTER_VERBOSE 0 
 #define FT_FILTER_MINIMAL_VERBOSE 0
@@ -474,10 +475,14 @@ __u32 get_oseq_out(struct net_filter_info* filter, __u32 seq){
         return seq- filter->odelta_seq;
 }
 
+#define FT_SEND_BUFFER_BASE 0
+#define FT_SEND_BUFFER_FLUSHED 1
+#define FT_SEND_BUFFER_FLUSHING 2
 struct send_buffer{
         __u32 first_byte_to_consume;
 	__u32 last_ack;
         spinlock_t lock;
+	rwlock_t flushing_lock;
 	int flushed;
 	int pending_send_syscall;
         struct list_head send_buffer_head;
@@ -490,6 +495,11 @@ struct send_buffer_entry{
         char data;
 };
 
+struct flush_send_buffer_work{
+	struct work_struct work;	
+	struct net_filter_info* filter;
+};
+
 /* Creates a send_buffer and store it in *@send_buffer.
  * It initializes fields to default values.
  */
@@ -499,9 +509,10 @@ void init_send_buffer(struct send_buffer **send_buffer){
         if(se_buffer){
                 se_buffer->first_byte_to_consume= 0;
 		se_buffer->last_ack= 0;
-		se_buffer->flushed= 0;
+		se_buffer->flushed= FT_SEND_BUFFER_BASE;
 		se_buffer->pending_send_syscall= 0;
                 spin_lock_init(&se_buffer->lock);
+		rwlock_init(&se_buffer->flushing_lock);
                 INIT_LIST_HEAD(&se_buffer->send_buffer_head);
                 *send_buffer= se_buffer;
         }
@@ -559,12 +570,17 @@ u32 get_last_ack_send_buffer(struct send_buffer *send_buffer){
  *
  */
 int is_send_buffer_flushed(struct send_buffer *send_buffer){
-	return send_buffer->flushed==1;
+	return send_buffer->flushed==FT_SEND_BUFFER_FLUSHED;
 }
 
 int is_send_buffer_flushing(struct send_buffer *send_buffer){
-	return send_buffer->flushed==2;
+	return send_buffer->flushed==FT_SEND_BUFFER_FLUSHING;
 }
+
+int is_send_buffer_to_flush(struct send_buffer *send_buffer){
+	return send_buffer->pending_send_syscall > 0;
+}
+
 /* Adds @size bytes copied from @iov to the @send_buffer. It also computes the csum of the data and stores it in *@csum.  
  *
  * NOTE: if last_ack received is greater than first_byte_to_consume, the first last_ack-first_byte_to_consume bytes of @iov won't be copied
@@ -622,7 +638,6 @@ int insert_in_send_buffer_and_csum(struct send_buffer *send_buffer, struct iovec
 		where_to_copy+= iov[i].iov_len;
         }
 	where_to_copy[0]='\0';
-	//FTMPRINTK("%s: data %s size %d\n", __func__, &entry->data, len);
 	//trace_printk("[%d]%s: data %s size %d\n", current->id_syscall, __func__, &entry->data, len);
 
 	spin_lock_bh(&send_buffer->lock);
@@ -691,6 +706,11 @@ int remove_from_send_buffer(struct send_buffer *send_buffer, __u32 last_ack){
 
 	spin_lock_bh(&send_buffer->lock);
 
+	if(send_buffer->flushed!=FT_SEND_BUFFER_BASE){
+		spin_unlock_bh(&send_buffer->lock);
+		return 0;
+	}
+
 	/* case not yet initialized, but it should not happen...
 	 *
 	 */
@@ -756,17 +776,16 @@ int dec_and_check_pending_send_on_send_buffer(struct send_buffer *send_buffer){
 int fake_flush_send_buffer(struct send_buffer *send_buffer, struct sock* sock){
 	struct msghdr msg;
 	struct kvec iov;
-	struct send_buffer_entry *entry;
-        struct list_head *send_buffer_head, *item, *n;
 	int ret, len, sent, size, retry;
+	char* app;
 
 	if(sock->sk_state!=0)
-		return;
+		return 0;
 
 	size = 8192;
-	char *app= kmalloc(size*2,GFP_ATOMIC);
+	app= kmalloc(size*2,GFP_ATOMIC);
 	if(!app)
-		return;
+		return 0;
 
 	spin_lock_bh(&send_buffer->lock);
 
@@ -819,13 +838,33 @@ next:	//sock->ft_filter->odelta_seq+= removed;
 	
 	kfree(app);
 	return 0;
-}/* Flush of the send buffer:
+}
+
+void lock_send_buffer_for_flushing(struct send_buffer *send_buffer){
+	write_lock(&send_buffer->flushing_lock);
+}
+
+void unlock_send_buffer_for_flushing(struct send_buffer *send_buffer){
+	write_unlock(&send_buffer->flushing_lock);
+}
+
+void lock_send_buffer_to_exclude_flushing(struct send_buffer *send_buffer){
+	read_lock(&send_buffer->flushing_lock);
+}
+
+void unlock_send_buffer_to_exclude_flushing(struct send_buffer *send_buffer){
+	read_unlock(&send_buffer->flushing_lock);
+}
+
+
+
+/* Flush of the send buffer:
  * All data that is stored in @send_buffer will be removed and sent over the network through @sock.
  * 
  * NOTE: this is suppose to be called upon failure of the primary and if this replica has been elected new primary.
  * To be called before updating replica type and flush syscall info.
  */
-int flush_send_buffer(struct send_buffer *send_buffer, struct sock* sock){
+int flush_send_buffer(struct send_buffer *send_buffer, struct sock* sock, int blocking){
 	struct msghdr msg;
 	struct kvec iov;
 	struct send_buffer_entry *entry;
@@ -833,17 +872,19 @@ int flush_send_buffer(struct send_buffer *send_buffer, struct sock* sock){
 	int ret, sent, len, removed, retry;
 
 	spin_lock_bh(&send_buffer->lock);
+	
+	send_buffer->flushed= FT_SEND_BUFFER_FLUSHING;
 
         /* case not yet initialized, but it should not happen...
          *
          */
         if(send_buffer->first_byte_to_consume == 0 || list_empty(&send_buffer->send_buffer_head)){
-                send_buffer->flushed= 1;
+                send_buffer->flushed= FT_SEND_BUFFER_FLUSHED;
 		spin_unlock_bh(&send_buffer->lock);
                 return 0;
         }
 
-        trace_printk("%s send_buffer->last_ack %u send_buffer->first_byte_to_consume %u \n", __func__, send_buffer->last_ack, send_buffer->first_byte_to_consume);
+        //trace_printk("%s send_buffer->last_ack %u send_buffer->first_byte_to_consume %u \n", __func__, send_buffer->last_ack, send_buffer->first_byte_to_consume);
 
         send_buffer_head= &send_buffer->send_buffer_head;
 
@@ -859,14 +900,15 @@ int flush_send_buffer(struct send_buffer *send_buffer, struct sock* sock){
 		if (len > INT_MAX)
 			len = INT_MAX;
 
-		trace_printk("sending %d bytes\n", len);
+		trace_printk("sending %d bytes port %d\n", len, ntohs(sock->ft_filter->tcp_param.dport));
 		iov.iov_base = (void*) ( (char*) &entry->data + (entry->to_consume_start+sent));
 		iov.iov_len = len;
 		msg.msg_name = NULL;
 		msg.msg_control = NULL;
 		msg.msg_controllen = 0;
 		msg.msg_namelen = 0;
-		msg.msg_flags = MSG_DONTWAIT;
+		if(!blocking)
+			msg.msg_flags = MSG_DONTWAIT;
 
 		/* remove kernel_sendmsg if you don't want to retrasmit the date stored in the send buffer
 		 * over the network, but enable the line at the bottom of the function to update
@@ -876,19 +918,41 @@ int flush_send_buffer(struct send_buffer *send_buffer, struct sock* sock){
 		 * update your delta.
 		 * But you should not assume that, that's why I am resending everything.
 		 */
+		spin_unlock_bh(&send_buffer->lock);
 		ret= kernel_sendmsg(sock->sk_socket, &msg, &iov, 1, len);
+		spin_lock_bh(&send_buffer->lock);
 		if(ret!=len){
 			if(retry>10){
+				sent+= len;
 				printk("%s ERROR sock send msg not able to send %d bytes after 10 attepts port %d (ret is %d)\n", __func__, len, ntohs(sock->ft_filter->tcp_param.dport), ret);
 				trace_printk("ERROR sock send msg not able to send %d bytes after 10 attepts port %d (ret is %d)\n", len, ntohs(sock->ft_filter->tcp_param.dport), ret);
 				goto next;
 			}
-			if(ret<0 && ret!=-EAGAIN){
+
+			if(ret==-EAGAIN){
+                     		if(!blocking){
+					//socket buffer full => wait for acks to empty it.
+					//Note that FT_SEND_BUFFER_FLUSHING is not unset
+					entry->to_consume_start+= sent;
+					removed+= sent;
+					send_buffer->first_byte_to_consume+= removed;
+					spin_unlock_bh(&send_buffer->lock);
+					printk("WARNING socket retured EAGAIN while flushing %d bytes on port %d\n", len, ntohs(sock->ft_filter->tcp_param.dport));
+					trace_printk("socket retured EAGAIN while sending %d bytes on port %d\n", len, ntohs(sock->ft_filter->tcp_param.dport));
+					return 0;
+				}
+			}
+
+			if(ret<0){
+				sent+= len;
 				printk("%s ERROR sock send msg returned error:%d while sending %d bytes on port %d\n", __func__, ret, len, ntohs(sock->ft_filter->tcp_param.dport));
 				trace_printk("ERROR sock send msg returned error:%d while sending %d bytes on port %d\n", ret, len, ntohs(sock->ft_filter->tcp_param.dport));
+				goto next;
 			}
-			if(ret>0)
+			else{
 				sent+=ret;
+			}
+
 			trace_printk("kernel send msg port %d sent %d bytes instead of %d, retry %d\n", ntohs(sock->ft_filter->tcp_param.dport), ret, len, retry+1);
 			retry++;
 			goto again;
@@ -912,13 +976,29 @@ next:		entry->to_consume_start+= sent;
 
         }
 
-	send_buffer->flushed= 1;
+	send_buffer->flushed= FT_SEND_BUFFER_FLUSHED;
         send_buffer->first_byte_to_consume+= removed;
 
 	//sock->ft_filter->odelta_seq+= removed;
         spin_unlock_bh(&send_buffer->lock);
 	
 	return 0;
+}
+
+static void flush_send_buffer_from_work(struct work_struct* work){
+	struct flush_send_buffer_work *my_work= (struct flush_send_buffer_work*) work;
+	struct net_filter_info *filter= my_work->filter;
+
+	trace_printk("port %d\n", ntohs(filter->tcp_param.dport));
+
+	lock_send_buffer_for_flushing(filter->send_buffer);
+	if(!is_send_buffer_flushed(filter->send_buffer)){
+		flush_send_buffer(filter->send_buffer, filter->ft_sock, 1);
+	}
+	unlock_send_buffer_for_flushing(filter->send_buffer);
+	
+	put_ft_filter(filter);
+	kfree(work);
 }
 
 struct stable_buffer{
@@ -1573,6 +1653,14 @@ static void remove_filter(struct net_filter_info* filter){
 
 }
 
+atomic_t primary_dropped= ATOMIC_INIT(0);
+atomic_t primary_received= ATOMIC_INIT(0);
+
+void print_net_statistics(void){
+	printk("primary_dropped %d\n", atomic_read(&primary_dropped));
+	printk("primary_received %d\n", atomic_read(&primary_received));
+}
+
 /*for debugging it prints filter information in trace of debug filesystem*/
 void print_all_filters(void){
 	struct net_filter_info* filter= NULL;
@@ -1592,6 +1680,8 @@ void print_all_filters(void){
 		}
         }
 
+	trace_printk("primary dropped %d packets\n", atomic_read(&primary_dropped));
+	trace_printk("primary dropped %d packets\n", atomic_read(&primary_received));
 	spin_unlock_bh(&filter_list_lock);
 	
 	/*head= &pending_handshake;
@@ -4317,7 +4407,7 @@ again:	spin_lock_bh(&filter->lock);
 
 			spin_unlock_bh(&filter->lock);
 
-			trace_printk("WARNING pckt id %d for listen wq on not listen wq\n", msg->pckt_id);
+			trace_printk("WARNING pckt id %llu for listen wq on not listen wq\n", msg->pckt_id);
 
 			queue_work(pckt_dispatcher_pool[PCKT_DISP_POOL_SIZE], work);
 			if(next_work)			
@@ -5341,8 +5431,7 @@ static unsigned int check_if_pckt_to_drop(struct net_filter_info *filter, struct
 			}
                 }
 		else{
-
-			if(size>0 && !(size==1 && tcp_header->syn)){
+			if(ft_is_filter_primary(filter) && size>0 && !(size==1 && tcp_header->syn)){
                         	ret= NF_DROP;
                         	//tcp_v4_send_reset(filter->ft_sock, skb);
                         	goto out;
@@ -5371,6 +5460,11 @@ static unsigned int check_if_pckt_to_drop(struct net_filter_info *filter, struct
 
 out:	
 	__skb_push(skb, ip_hdrlen(skb));
+
+	if(ret==NF_DROP)
+		atomic_inc(&primary_dropped);
+
+	atomic_inc(&primary_received);
 
 	return ret;
 
@@ -5955,7 +6049,19 @@ unsigned int ft_hook_before_tcp_primary_after_secondary(struct sk_buff *skb, str
 		 */
                 if(!is_send_buffer_flushed(filter->send_buffer)){
 			//NOTE send buffer has been initialized with primary seq, so it is safe to not apply any delta to the used ack.
-                	remove_from_send_buffer(filter->send_buffer, TCP_SKB_CB(skb)->ack_seq);
+			if(!is_send_buffer_flushing(filter->send_buffer)){
+                		remove_from_send_buffer(filter->send_buffer, TCP_SKB_CB(skb)->ack_seq);
+			}
+			else{
+				//try finish flush
+				struct flush_send_buffer_work *flush_work= kmalloc(sizeof(*flush_work), GFP_ATOMIC);
+				if(flush_work){
+					get_ft_filter(filter);
+					flush_work->filter= filter;	
+					INIT_WORK( (struct work_struct*)flush_work, flush_send_buffer_from_work);
+					queue_work(peak_wq_from_pckt_dispatcher_pool(), (struct work_struct*) flush_work);
+				}
+			}
 		}
 
 		/* Let the packet transit 
@@ -5966,7 +6072,7 @@ unsigned int ft_hook_before_tcp_primary_after_secondary(struct sk_buff *skb, str
 		size= end-start;
 			
 		//trace_printk("tcp_sk(sk)->rcv_nxt %u tcp_sk(sk)->snd_nxt %u\n",tcp_sk(sk)->rcv_nxt, tcp_sk(sk)->snd_nxt);
-		//trace_printk("before status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
+		trace_printk("before status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
 		
 		if(TCP_SKB_CB(skb)->seq <= get_last_byte_received_stable_buffer(filter->stable_buffer)){
 			//the client is resending data already received
@@ -6013,7 +6119,7 @@ unsigned int ft_hook_before_tcp_primary_after_secondary(struct sk_buff *skb, str
 		end= ntohl(tcp_header->seq)+ tcp_header->syn+ tcp_header->fin+ skb->len- tcp_header->doff*4;
 		size= end-start;
 
-		//trace_printk("status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
+		trace_printk("status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
 
 		return NF_ACCEPT;
 		
@@ -6103,6 +6209,12 @@ unsigned int ft_hook_before_tcp_primary_after_secondary(struct sk_buff *skb, str
 		{
 		
 		tcp_header= tcp_hdr(skb); 
+
+		if(filter->send_buffer && !is_send_buffer_flushed(filter->send_buffer))
+                        trace_printk(" send buffer is %d on socket status %d port %d\n", filter->send_buffer->flushed, filter->ft_sock? filter->ft_sock->sk_state:-1, ntohs(tcp_header->source));
+
+
+
 		iph = ip_hdr(skb);
 
 		start= ntohl(tcp_header->seq);
@@ -6110,23 +6222,23 @@ unsigned int ft_hook_before_tcp_primary_after_secondary(struct sk_buff *skb, str
 		size= end-start;
 
 		//trace_printk("tcp_sk(sk)->rcv_nxt %u tcp_sk(sk)->snd_nxt %u\n",tcp_sk(sk)->rcv_nxt, tcp_sk(sk)->snd_nxt);
-		//trace_printk("%s before status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", __func__, filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source)); 
+		trace_printk("before status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", filter->ft_sock?filter->ft_sock->sk_state:-1, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source)); 
 		 
-		 /* Let the packet transit to close connections 
-		  * but change seq/ack_seq
-		  */
+		/* Let the packet transit to close connections 
+		 * but change seq/ack_seq
+		 */
 
-		 tcp_header->seq= htonl(get_iseq_in(filter, ntohl(tcp_header->seq))); 
-		 tcp_header->ack_seq= htonl(get_oseq_in(filter, ntohl(tcp_header->ack_seq)));
+		tcp_header->seq= htonl(get_iseq_in(filter, ntohl(tcp_header->seq))); 
+		tcp_header->ack_seq= htonl(get_oseq_in(filter, ntohl(tcp_header->ack_seq)));
 		 
-		 //recompute checksum
-		 tcp_header->check = 0;
-		 tcp_header->check= checksum_tcp_rx(skb, skb->len, iph, tcp_header);
+		//recompute checksum
+		tcp_header->check = 0;
+		tcp_header->check= checksum_tcp_rx(skb, skb->len, iph, tcp_header);
 
 		start= ntohl(tcp_header->seq);
 		end= ntohl(tcp_header->seq)+ tcp_header->syn+ tcp_header->fin+ skb->len- tcp_header->doff*4;
 		size= end-start;
-		//trace_printk("%s status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", __func__, filter->ft_sock->sk_state, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
+		trace_printk("status %d: syn %u ack %u fin %u seq %u end seq %u size %u ack_seq %u port %i\n", filter->ft_sock? filter->ft_sock->sk_state:-1, tcp_header->syn, tcp_header->ack, tcp_header->fin, start, end, size,ntohl( tcp_header->ack_seq), ntohs(tcp_header->source));
 
 		 return NF_ACCEPT;
 		}
@@ -6987,7 +7099,8 @@ out:
 
 /* NOTE: to be called only after flush filters to be sure that all the 
  * data has been acknoleged in send buffer before flushing.
- *
+ * It tries to flush data pending on send buffer if possible, otherwise the flush is postpone or after send if still there are syscall pending,
+ * or upon ack of sent data is socket is full and cannot flush the entire stream of data prenset in the send buffer.
  */
 int flush_send_buffer_in_filters(void){
         struct list_head *iter= NULL;
@@ -7000,7 +7113,6 @@ int flush_send_buffer_in_filters(void){
         if(!list_empty(&filter_list_head)){
                 list_for_each(iter, &filter_list_head) {
                         filter = list_entry(iter, struct net_filter_info, list_member);
-			//spin_lock_bh(&filter->lock);
                         if( !(filter->type & FT_FILTER_FAKE) && (filter->type & FT_FILTER_ENABLE) && filter->ft_sock && filter->ft_sock->sk_state!=TCP_CLOSE
 					 && filter->ft_sock->sk_state!=TCP_FIN_WAIT1
 					 && filter->ft_sock->sk_state!=TCP_FIN_WAIT2
@@ -7009,18 +7121,18 @@ int flush_send_buffer_in_filters(void){
 					 && filter->ft_sock->sk_state!=TCP_LAST_ACK
 					 && filter->ft_sock->sk_state!=TCP_CLOSING){
 				
-				//spin_unlock_bh(&filter->lock);
+				lock_send_buffer_for_flushing(filter->send_buffer);
+				
 				ft_get_key_from_filter(filter,"SEND", &key, &pending_send_syscall);
 				if(!key){
+					unlock_send_buffer_for_flushing(filter->send_buffer);
 					goto out;
 				}
-				pending_send_syscall= ft_are_syscall_extra_key_present(key);
+
+				pending_send_syscall= ft_check_and_set_syscall_extra_key(key, &filter->send_buffer->pending_send_syscall);
+				//pending_send_syscall= ft_are_syscall_extra_key_present(key);
                              	kfree(key);
-				if(pending_send_syscall){
-					set_pending_send_on_send_buffer(filter->send_buffer, pending_send_syscall);		
-				}
-				else{
-					//spin_lock_bh(&filter->lock);
+				if(pending_send_syscall==0){
 					if(filter->type & FT_FILTER_ENABLE && filter->ft_sock && filter->ft_sock->sk_state!=TCP_CLOSE
 						 && filter->ft_sock->sk_state!=TCP_FIN_WAIT1
 						 && filter->ft_sock->sk_state!=TCP_FIN_WAIT2
@@ -7029,26 +7141,17 @@ int flush_send_buffer_in_filters(void){
 						 && filter->ft_sock->sk_state!=TCP_LAST_ACK
 						 && filter->ft_sock->sk_state!=TCP_CLOSING){
 						
-						filter->send_buffer->flushed= 2;
-						trace_printk("flushing send buffer port %d\n", ntohs(filter->tcp_param.dport));
-					       // spin_unlock_bh(&filter->lock);	
-						ret= flush_send_buffer(filter->send_buffer, filter->ft_sock);
+						//trace_printk("flushing send buffer port %d\n", ntohs(filter->tcp_param.dport));
+						ret= flush_send_buffer(filter->send_buffer, filter->ft_sock, 0);
 						if(ret){
-							//spin_unlock_bh(&filter->lock);
+							unlock_send_buffer_for_flushing(filter->send_buffer);
 							goto out;
 						}
-						else{
-							//spin_unlock_bh(&filter->lock);
-						}
 					}
-					else{
-						//spin_unlock_bh(&filter->lock);
-					}	
 				}
+				
+				unlock_send_buffer_for_flushing(filter->send_buffer);
                         }
-			else{
-				//spin_lock_bh(&filter->lock);
-			}
                 }
         }
 
@@ -7119,6 +7222,7 @@ int update_filter_type_after_failure(void){
 					spin_lock_bh(&filter->lock);
 					filter->type &= ~FT_FILTER_SECONDARY_REPLICA;
 					filter->type |= FT_FILTER_PRIMARY_AFTER_SECONDARY_REPLICA;
+					trace_printk("port %d status %d tw %d\n", ntohs(filter->tcp_param.dport), filter->ft_sock?filter->ft_sock->sk_state:-1, filter->ft_time_wait?1:0);
 					if( filter->ft_time_wait || filter->ft_sock){
 						if(!(filter->ft_time_wait && filter->ft_sock)){
 							new= kmalloc(sizeof(*new), GFP_ATOMIC);	
