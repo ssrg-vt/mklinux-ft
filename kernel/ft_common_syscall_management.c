@@ -831,7 +831,6 @@ static int handle_syscall_info_msg(struct pcn_kmsg_message* inc_msg){
         wait_info->task= NULL;
         wait_info->populated= 1;
 
-        trace_printk("%s got sync %d[%s]\n", __func__, msg->syscall_id, key);
         if((present_info= ((struct wait_syscall*) ft_syscall_hash_add(key, (void*) wait_info)))){
 		if (present_info->task == NULL) {
             printk("%s ERROR PRESENT INFO TASK IS NULL %d[%s]\n", __func__, msg->syscall_id, key);
@@ -1055,6 +1054,7 @@ long syscall_hook_enter(struct pt_regs *regs)
 {
         current->current_syscall = regs->orig_ax;
         current->bumped = -1;
+        struct popcorn_namespace *ns;
         /*
          * System call number is in orig_ax
          * Only increment the system call counter if we see one of the synchronized system calls.
@@ -1063,9 +1063,11 @@ long syscall_hook_enter(struct pt_regs *regs)
          * __NR_read, __NR_sendto, __NR_sendmsg, __NR_recvfrom, __NR_recvmsg, __NR_write
          * Because we don't want non-socket read & write to be tracked.
          */
-        if (ft_is_replicated(current))
-            trace_printk("%d[%d] in syscall %d<%d>\n", current->pid, current->ft_det_tick, regs->orig_ax, current->id_syscall);
-
+/*
+ *        if (ft_is_replicated(current))
+ *            trace_printk("%d[%d] in syscall %d<%d>\n", current->pid, current->ft_det_tick, regs->orig_ax, current->id_syscall);
+ *
+ */
         if(ft_is_replicated(current) &&
                 // TODO: orgnize those syscalls in a better way, avoid this tidious if conditions
                    (current->current_syscall == __NR_gettimeofday ||
@@ -1076,8 +1078,11 @@ long syscall_hook_enter(struct pt_regs *regs)
                     current->current_syscall == __NR_accept4 ||
                     current->current_syscall == __NR_bind ||
                     current->current_syscall == __NR_listen)) {
+            ns = current->nsproxy->pop_ns;
+            spin_lock(&ns->task_list_lock);
             current->id_syscall++;
             current->bumped = 0;
+            spin_unlock(&ns->task_list_lock);
             if (ft_is_secondary_replica(current)) {
                 // Wake me up when OSDI ends
                 wait_bump(current);
@@ -1128,9 +1133,13 @@ void syscall_hook_exit(struct pt_regs *regs)
              *
              * Alright futex is handled inside the do_futex.
              */
+            spin_lock_irqsave(&current->nsproxy->pop_ns->task_list_lock, flags);
             if (current->ft_det_state == FT_DET_SLEEP_SYSCALL ||
                     current->ft_det_state == FT_DET_ACTIVE) {
+                spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
                 det_wake_up(current);
+            } else {
+                spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
             }
         }
         current->current_syscall = -1;

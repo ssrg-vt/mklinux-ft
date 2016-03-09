@@ -211,7 +211,7 @@ static inline int update_token(struct popcorn_namespace *ns)
 	if(is_det_sched_disable(current))
 		return 0;
 
-	mb();
+	smp_mb();
 	list_for_each_prev(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
 		tick_value = objPtr->task->ft_det_tick;
@@ -239,9 +239,9 @@ static inline int update_token(struct popcorn_namespace *ns)
 				 objPtr->task->current_syscall == __NR_epoll_wait ||
 				 objPtr->task->current_syscall == __NR_gettimeofday ||
 				 objPtr->task->current_syscall == __NR_bind ||
-				 //objPtr->task->current_syscall == __NR_wait4 ||
 				 objPtr->task->current_syscall == __NR_nanosleep ||
 				 objPtr->task->current_syscall == __NR_socket ||
+				 objPtr->task->current_syscall == __NR_popcorn_det_start ||
 #endif
 				 objPtr->task->ft_det_state == FT_DET_WAIT_TOKEN) {
 				new_token = objPtr;
@@ -249,13 +249,14 @@ static inline int update_token(struct popcorn_namespace *ns)
 			}
 		}
 	}
-	/*if (ns->token != NULL && ns->token->task != NULL && new_token != NULL && new_token->task != NULL)
-	    trace_printk("token from %d[%d]<%d> to %d[%d]<%d>\n", ns->token->task->pid, ns->token->task->ft_det_tick, new_token->task->id_syscall, new_token->task->pid, new_token->task->ft_det_tick, new_token->task->id_syscall);
+	mb();
+	if (ns->token != NULL && ns->token->task != NULL && new_token != NULL && new_token->task != NULL)
+		trace_printk("token from %d[%d]<%d> to %d[%d]<%d>\n", ns->token->task->pid, ns->token->task->ft_det_tick, ns->token->task->id_syscall, new_token->task->pid, new_token->task->ft_det_tick, new_token->task->id_syscall);
 	else if ((ns->token == NULL || ns->token->task == NULL) && (new_token != NULL && new_token->task != NULL))
 		trace_printk("token from NULL to %d[%d]<%d>\n", new_token->task->pid, new_token->task->ft_det_tick, new_token->task->id_syscall);
 	else if ((ns->token == NULL || ns->token->task == NULL) && (new_token == NULL || new_token->task == NULL))
-	    trace_printk("token from NULL to NULL\n");
-	*/
+		trace_printk("token from NULL to NULL\n");
+	
 	mb();
 
 	ns->token = new_token;
@@ -281,6 +282,7 @@ static inline int update_tick(struct task_struct *task, long tick)
 	//dump_task_list(ns);
 	spin_lock_irqsave(&ns->task_list_lock, flags);
 	task->ft_det_tick += tick;
+	smp_mb();
 	update_token(ns);
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 	return 1;
