@@ -1769,6 +1769,7 @@ static void futex_wait_queue_me(struct futex_hash_bucket *hb, struct futex_q *q,
 	 */
 	set_current_state(TASK_INTERRUPTIBLE);
 
+	smp_mb();
 //#ifndef DETONLY
 	if (is_popcorn(current)) {
 		ns = current->nsproxy->pop_ns;

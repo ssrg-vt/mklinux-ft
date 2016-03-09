@@ -868,7 +868,10 @@ struct epoll_event *ep_find_epoll_event(struct eventpoll *ep, struct file *file,
 
 	/* From fd and file structure, derive epitem */
 	epi = ep_find(ep, file, fd);
-	return &epi->event;
+	if (epi)
+		return &epi->event;
+	else
+		return NULL;
 }
 
 /*
@@ -1284,11 +1287,14 @@ static int ep_send_events_proc(struct eventpoll *ep, struct list_head *head,
 			if (__put_user(revents, &uevent->events) ||
 			    __put_user(epi->event.data, &uevent->data)) {
 				list_add(&epi->rdllink, head);
+				if (eventcnt) {
+					ep->ev_fds[eventcnt].fd = epi->ffd.fd;
+					ep->ev_fds[eventcnt].events = revents;
+				}
 				return eventcnt ? eventcnt : -EFAULT;
 			}
 			ep->ev_fds[eventcnt].fd = epi->ffd.fd;
 			ep->ev_fds[eventcnt].events = revents;
-			//printk("%d is ready\n", epi->ffd.fd);
 			eventcnt++;
 			uevent++;
 			if (epi->event.events & EPOLLONESHOT)
@@ -1678,7 +1684,7 @@ SYSCALL_DEFINE4(epoll_ctl, int, epfd, int, op, int, fd,
 	error = -EINVAL;
 	switch (op) {
 	case EPOLL_CTL_ADD:
-		//printk("Adding fd %d to %d (%d)\n", fd, epfd, current->pid);
+		trace_printk("Adding fd %d to %d (%d)\n", fd, epfd, current->pid);
 		if (!epi) {
 			epds.events |= POLLERR | POLLHUP;
 			error = ep_insert(ep, &epds, tfile, fd);
@@ -1723,6 +1729,7 @@ int ft_ep_poll_secondary(struct eventpoll *ep, struct epoll_event __user *events
 {
 	int ret=-EFAULT;
 	int i;
+	long flags;
 	struct epoll_wait_info *epinfo = NULL;
 	struct file *ff;
 	struct epoll_event *ev;
@@ -1734,6 +1741,8 @@ int ft_ep_poll_secondary(struct eventpoll *ep, struct epoll_event __user *events
 		return -EFAULT;
 	}
 
+	mutex_lock(&epmutex);
+	mutex_lock_nested(&ep->mtx, 0);
 	if (epinfo->nr_events > 0) {
 		//copy_to_user(events, epinfo->events, epinfo->nr_events * sizeof(struct epoll_event));
 
@@ -1744,15 +1753,18 @@ int ft_ep_poll_secondary(struct eventpoll *ep, struct epoll_event __user *events
 			spin_unlock(&current->files->file_lock);
 
 			/* From fd and file structure, derive epoll_event */
+			spin_lock_irqsave(&ep->lock, flags);
 			ev = ep_find_epoll_event(ep, ff, epinfo->ev[i].fd);
-			//printk("got fd %d\n", epinfo->ev[i].fd);
+			trace_printk("%d is ready with %d\n", epinfo->ev[i].fd, epinfo->ev[i].events);
 			if (ev == NULL) {
 				printk("OMG llllllllllll%d\n", epinfo->ev[i].fd);
+				spin_unlock_irqrestore(&ep->lock, flags);
 				goto out;
 			}
 			/* Override the events field with the thing on the other side */
 			ev->events = epinfo->ev[i].events;
 			copy_to_user(events, ev, sizeof(struct epoll_event));
+			spin_unlock_irqrestore(&ep->lock, flags);
 			events++;
 		}
 	} else {
@@ -1762,6 +1774,8 @@ int ft_ep_poll_secondary(struct eventpoll *ep, struct epoll_event __user *events
 	ret = epinfo->nr_events;
 
 out:
+	mutex_unlock(&ep->mtx);
+	mutex_unlock(&epmutex);
 	kfree(epinfo);
 
 	return ret;

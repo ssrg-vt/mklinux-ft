@@ -97,7 +97,7 @@ struct ft_pop_rep_id{
  * It is a one-to-one mapping for each replicated thread in popcorn
  * (the same replicated thread will have the same ft_pid in all kernels).
  */
-#define MAX_GENERATION_LENGTH 5
+#define MAX_GENERATION_LENGTH 10
 struct ft_pid{
         int level;
         int id_array[MAX_GENERATION_LENGTH];

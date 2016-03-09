@@ -566,6 +566,7 @@ static inline int __sock_sendmsg_nosec(struct kiocb *iocb, struct socket *sock,
 
 #ifdef FT_POPCORN
 	if(ft_is_replicated(current)) {
+		current->bumped = 0;
 		current->id_syscall++;
 		//trace_printk("%d[%d] in syscall %d<%d>\n", current->pid, current->ft_det_tick, current->current_syscall, current->id_syscall);
 		if (ft_is_secondary_replica(current)) {
@@ -756,6 +757,7 @@ static inline int __sock_recvmsg_nosec(struct kiocb *iocb, struct socket *sock,
 
 #ifdef FT_POPCORN
 	if(ft_is_replicated(current)) {
+		current->bumped = 0;
 		current->id_syscall++;
 		//trace_printk("%d[%d] in syscall %d<%d>\n", current->pid, current->ft_det_tick, current->current_syscall, current->id_syscall);
 		if (ft_is_secondary_replica(current)) {
