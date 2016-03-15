@@ -1684,7 +1684,7 @@ SYSCALL_DEFINE4(epoll_ctl, int, epfd, int, op, int, fd,
 	error = -EINVAL;
 	switch (op) {
 	case EPOLL_CTL_ADD:
-		trace_printk("Adding fd %d to %d (%d)\n", fd, epfd, current->pid);
+		//trace_printk("Adding fd %d to %d (%d)\n", fd, epfd, current->pid);
 		if (!epi) {
 			epds.events |= POLLERR | POLLHUP;
 			error = ep_insert(ep, &epds, tfile, fd);
@@ -1755,7 +1755,7 @@ int ft_ep_poll_secondary(struct eventpoll *ep, struct epoll_event __user *events
 			/* From fd and file structure, derive epoll_event */
 			spin_lock_irqsave(&ep->lock, flags);
 			ev = ep_find_epoll_event(ep, ff, epinfo->ev[i].fd);
-			trace_printk("%d is ready with %d\n", epinfo->ev[i].fd, epinfo->ev[i].events);
+			//trace_printk("%d is ready with %d\n", epinfo->ev[i].fd, epinfo->ev[i].events);
 			if (ev == NULL) {
 				printk("OMG llllllllllll%d\n", epinfo->ev[i].fd);
 				spin_unlock_irqrestore(&ep->lock, flags);

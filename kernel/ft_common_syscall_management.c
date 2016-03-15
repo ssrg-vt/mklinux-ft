@@ -515,14 +515,16 @@ void ft_send_syscall_info(struct ft_pop_rep *replica_group, struct ft_pid *prima
 	ft_start_time(&time);
 	
 	// For debugging
+	/*
 	key = ft_syscall_get_key_from_ft_pid(primary_pid, syscall_id);
 	trace_printk("sending %s in %d\n", key, current->current_syscall);
 	kfree(key);
+	*/
 
 	send_syscall_info_to_secondary_replicas(replica_group, &primary_pid->ft_pop_id, primary_pid->level, primary_pid->id_array, syscall_id, syscall_info, syscall_info_size, NULL, 0);
 	
 	ft_end_time(&time);
-	ft_update_time(&time, TIME_SEND_SYCALL);
+	ft_update_time(&time, FT_TIME_SEND_SYCALL);
 }
 
 /* Supposed to be called by a primary replica to send syscall info to its secondary replicas.
@@ -539,7 +541,7 @@ void ft_send_syscall_info_extra_key(struct ft_pop_rep *replica_group, struct ft_
         send_syscall_info_to_secondary_replicas(replica_group, &primary_pid->ft_pop_id, primary_pid->level, primary_pid->id_array, syscall_id, syscall_info, syscall_info_size, extra_key, extra_key_size);
 
         ft_end_time(&time);
-        ft_update_time(&time, TIME_SEND_SYCALL);
+        ft_update_time(&time, FT_TIME_SEND_SYCALL);
 }
 
 /* As for ft_send_syscall_info, but a worker thread will be used to send the data.
@@ -625,9 +627,9 @@ void* ft_wait_for_syscall_info(struct ft_pid *secondary, int id_syscall){
 	char* key;
         int free_key= 0;
 	void* ret= NULL;
-	//u64 time;
+	u64 time;
 	
-	//ft_start_time(&time);
+	ft_start_time(&time);
 
 	FTPRINTK("%s called from pid %s\n", __func__, current->pid);
 
@@ -682,8 +684,8 @@ out:
 		kfree(present_info->extra_key);
         kfree(present_info);
 	
-	//ft_end_time(&time);
-	//ft_update_time(&time, TIME_RCV_SYSCALL);
+	ft_end_time(&time);
+	ft_update_time(&time, FT_TIME_RCV_SYSCALL);
 
         return ret;
 
@@ -1041,6 +1043,8 @@ void wait_bump(struct task_struct *task)
     struct popcorn_namespace *ns;
     ns = task->nsproxy->pop_ns;
 
+    u64 time;
+    ft_start_time(&time);
     /*
      * Now the thread puts itself into sleep, until it receives a -1 bump on current tick.
      * Because on the secondary every thread handles the bumps by itself, so no shepherd is needed.
@@ -1052,12 +1056,17 @@ void wait_bump(struct task_struct *task)
         update_token(ns);
         spin_unlock(&ns->task_list_lock);
     }
+
+    ft_end_time(&time);
+    ft_update_time(&time, FT_TIME_WAIT_BUMP);
 }
 
 int send_bump(struct task_struct *task, int id_syscall, uint64_t prev_tick, uint64_t new_tick)
 {
     struct tick_bump_msg *msg;
 
+    u64 time;
+    ft_start_time(&time);    
     //trace_printk("%d is bumping %d to %d [%d]<%d>\n", task->pid, prev_tick, new_tick, id_syscall, task->current_syscall);
     msg = kmalloc(sizeof(struct tick_bump_msg), GFP_KERNEL);
     if (!msg)
@@ -1078,6 +1087,8 @@ int send_bump(struct task_struct *task, int id_syscall, uint64_t prev_tick, uint
     send_to_all_secondary_replicas(task->ft_popcorn, (struct pcn_kmsg_long_message*) msg, sizeof(struct tick_bump_msg));
     kfree(msg);
     //trace_printk("%d done sending bump\n", task->pid);
+    ft_end_time(&time);
+    ft_update_time(&time, FT_TIME_WAIT_BUMP);
     return 0;
 }
 
@@ -1086,7 +1097,9 @@ long syscall_hook_enter(struct pt_regs *regs)
         current->current_syscall = regs->orig_ax;
         current->bumped = -1;
         struct popcorn_namespace *ns;
-        /*
+        u64 time;
+
+	/*
          * System call number is in orig_ax
          * Only increment the system call counter if we see one of the synchronized system calls.
          *
@@ -1099,6 +1112,10 @@ long syscall_hook_enter(struct pt_regs *regs)
  *            trace_printk("%d[%d] in syscall %d<%d>\n", current->pid, current->ft_det_tick, regs->orig_ax, current->id_syscall);
  *
  */
+	if(ft_is_replicated(current) && (current->current_syscall == 319 || current->current_syscall == 320)|| current->current_syscall == __NR_accept || current->current_syscall == __NR_poll){
+		ft_start_time(&time);
+	}
+	
         if(ft_is_replicated(current) &&
                 // TODO: orgnize those syscalls in a better way, avoid this tidious if conditions
                    (current->current_syscall == __NR_gettimeofday ||
@@ -1125,6 +1142,18 @@ long syscall_hook_enter(struct pt_regs *regs)
 	/*if(ft_is_replicated(current))
 		trace_printk("Syscall %d (sycall id %d) on pid %d tic %u\n", regs->orig_ax, current->id_syscall, current->pid, current->ft_det_tick);
 	*/
+	
+	if(ft_is_replicated(current) && (current->current_syscall == 319 || current->current_syscall == 320)){
+                ft_end_time(&time);
+		if(current->current_syscall == 319)
+			ft_update_time(&time, TOT_TIME_319);
+		if(current->current_syscall == 320)
+			ft_update_time(&time, TOT_TIME_320);
+		if(current->current_syscall == __NR_accept)
+			ft_update_time(&time, TOT_TIME_ACCEPT);
+		if(current->current_syscall == __NR_poll)
+			ft_update_time(&time, TOT_TIME_POLL);
+        }
 
         return regs->orig_ax;
 }

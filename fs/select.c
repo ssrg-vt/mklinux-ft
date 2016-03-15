@@ -28,7 +28,7 @@
 #include <linux/hrtimer.h>
 #include <linux/popcorn_namespace.h>
 #include <linux/ft_replication.h>
-
+#include <linux/ft_time_breakdown.h>
 #include <asm/uaccess.h>
 
 
@@ -932,12 +932,12 @@ SYSCALL_DEFINE3(poll, struct pollfd __user *, ufds, unsigned int, nfds,
 #ifdef FT_POPCORN
 	/* Retrive epoll info from primary */
 	if(ft_poll_before(ufds, nfds, &ret)==FT_SYSCALL_DROP)
-		return ret;
+		goto out;
 	/* For primary we disable the timeout */
-	if(ft_is_replicated(current) &&
+	/*if(ft_is_replicated(current) &&
 		(ft_is_primary_replica(current) || ft_is_primary_after_secondary_replica(current)) && !is_det_sched_disable(current) ) {
 		timeout_msecs = -1;
-	}
+	}*/
 #endif
 
 	if (timeout_msecs >= 0) {
@@ -972,6 +972,7 @@ SYSCALL_DEFINE3(poll, struct pollfd __user *, ufds, unsigned int, nfds,
 	
 #endif
 
+out:
 	return ret;
 }
 

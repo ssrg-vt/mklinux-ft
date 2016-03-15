@@ -216,9 +216,17 @@ struct net_filter_info{
 	struct send_buffer *send_buffer;
 
 	/*those fields should be moved inside a per-tcp struct together with tcp_param...*/	
+
+	/*initial tcp sequence for outgoing packets*/
 	__u32 my_initial_out_seq;
+	/*initial tcp sequence for outgoing packets of primary*/
+	__u32 primary_initial_out_seq;
+	/*initial tcp sequence for incoming packets, this is the initial tcp sequence of the client.
+	  Note: this seq is the same for primary and secondary because is chosen by the client*/
 	__u32 in_initial_seq;
+	/*delta for incoming packets. It is the number of contiguos bytes sent by the client and received by the primary since the beginning of the execution*/
 	__u32 idelta_seq;
+	/*delta for outgoing packets. It is the number of contiguos bytes sent by the primary and acked by the client since the beginning of the execution*/
 	__u32 odelta_seq;
 };
 
@@ -276,7 +284,7 @@ int is_stable_buffer_empty(struct stable_buffer *stable_buffer);
 int trim_stable_buffer_in_filters(void);
 int flush_send_buffer_in_filters(void);
 int dec_and_check_pending_send_on_send_buffer(struct send_buffer *send_buffer);
-int flush_send_buffer(struct send_buffer *send_buffer, struct sock* sock, int blocking);
+int flush_send_buffer_first_time(struct send_buffer *send_buffer, struct sock* sock);
 int is_send_buffer_flushed(struct send_buffer *send_buffer);
 int is_send_buffer_flushing(struct send_buffer *send_buffer);
 int is_send_buffer_to_flush(struct send_buffer *send_buffer);

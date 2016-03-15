@@ -20,6 +20,7 @@
 #include <asm/atomic.h>
 #include <asm/msr.h>
 #include <linux/time.h>
+#include <linux/ft_time_breakdown.h>
 
 //#define DET_PROF 1
 
@@ -330,12 +331,13 @@ long __det_start(struct task_struct *task)
 #ifdef DET_PROF
 	uint64_t dtime;
 #endif
-
+	u64 time;
+	
 	if(!is_popcorn(task) || is_det_sched_disable(task)) {
 		return 0;
 	}
 
-	
+	ft_start_time(&time);	
 	/*cannot avoid to run deterministically after failure. The secondary copy migth be beyond, so the threads still need to det run to consume
 	 *exactly the same syscall done by the primary
 	if(ft_is_primary_after_secondary_replica(task) 
@@ -389,7 +391,8 @@ long __det_start(struct task_struct *task)
 	ns->start_cost[task->pid % 64] += dtime;
 	spin_unlock(&(ns->tick_cost_lock));
 #endif
-
+	ft_end_time(&time);
+	ft_update_time(&time, FT_TIME_DET_START);
 	return 1;
 }
 

@@ -1399,9 +1399,6 @@ SYSCALL_DEFINE3(socket, int, family, int, type, int, protocol)
 	int retval;
 	struct socket *sock;
 	int flags;
-	u64 time;
-
-	ft_start_time(&time);
 
 	/* Check the SOCK_* constants for consistency.  */
 	BUILD_BUG_ON(SOCK_CLOEXEC != O_CLOEXEC);
@@ -1426,9 +1423,6 @@ SYSCALL_DEFINE3(socket, int, family, int, type, int, protocol)
 		goto out_release;
 
 out:
-
-	ft_end_time(&time);
-	ft_update_time(&time, TIME_CREATE_SOCKET);
 
 	/* It may be already another descriptor 8) Not kernel problem. */
 	return retval;
@@ -1558,10 +1552,6 @@ SYSCALL_DEFINE2(listen, int, fd, int, backlog)
 	int err, fput_needed;
 	int somaxconn;
 
-	u64 time;
-	
-	ft_start_time(&time);
-	
 	sock = sockfd_lookup_light(fd, &err, &fput_needed);
 	if (sock) {
 		somaxconn = sock_net(sock->sk)->core.sysctl_somaxconn;
@@ -1579,9 +1569,6 @@ SYSCALL_DEFINE2(listen, int, fd, int, backlog)
 		fput_light(sock->file, fput_needed);
 	}
 
-	ft_end_time(&time);
-	ft_update_time(&time, TIME_LISTEN);
-	
 	return err;
 }
 
@@ -1833,7 +1820,7 @@ out_put:
 out:
 
 	ft_end_time(&time);
-	ft_update_time(&time, TIME_SEND);
+	ft_update_time(&time, TOT_TIME_SEND);
 
 	return err;
 }
@@ -1897,7 +1884,7 @@ SYSCALL_DEFINE6(recvfrom, int, fd, void __user *, ubuf, size_t, size,
 out:
 
 	ft_end_time(&time);
-	ft_update_time(&time, TIME_RCV);
+	ft_update_time(&time, TOT_TIME_RCV);
 
 	return err;
 }

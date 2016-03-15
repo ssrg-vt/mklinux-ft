@@ -24,21 +24,27 @@
 #define FT_TIME_INJECT_RECV_PACKET 9
 #define FT_TIME_INJECT_HANDSHACKE_PACKETS 10
 
-#define TIME_SEND 11
-#define TIME_RCV 12
-#define TIME_LISTEN 13
-#define TIME_CREATE_SOCKET 14
+#define TOT_TIME_SEND 11
+#define TOT_TIME_RCV 12
+#define TOT_TIME_POLL 13
+#define TOT_TIME_319 14
+#define TOT_TIME_320 15
+#define TOT_TIME_ACCEPT 16
 
-#define TIME_SEND_SYCALL 15
-#define TIME_RCV_SYSCALL 16
+#define FT_TIME_SEND_SYCALL 17
+#define FT_TIME_RCV_SYSCALL 18
+#define FT_TIME_DET_START 19
+#define FT_TIME_WAIT_BUMP 20
+#define FT_TIME_SEND_BUMP 21
 
-#define MAX_BREACKDOWNS 17
+#define MAX_BREACKDOWNS 22
 
 #if FT_BREAKDOWN_TIME
 
 void ft_start_time(u64 *time);
 void ft_end_time(u64 *time);
 void ft_update_time(u64 *time, unsigned int type);
+int print_ft_time_breakdown(void);
 
 #else
 

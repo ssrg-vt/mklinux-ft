@@ -1020,7 +1020,7 @@ check_flush:	lock_send_buffer_to_exclude_flushing(sock->sk->ft_filter->send_buff
 			lock_send_buffer_for_flushing(sock->sk->ft_filter->send_buffer);
 			if(dec_and_check_pending_send_on_send_buffer(sock->sk->ft_filter->send_buffer)){
         			//trace_printk("flushing send buffer of port %d\n", ntohs(sock->sk->ft_filter->tcp_param.dport));
-	                	flush_send_buffer(sock->sk->ft_filter->send_buffer, sock->sk, 1);
+	                	flush_send_buffer_first_time(sock->sk->ft_filter->send_buffer, sock->sk);
                 	}
 			unlock_send_buffer_for_flushing(sock->sk->ft_filter->send_buffer);
 		}
@@ -1081,7 +1081,7 @@ out:
 		lock_send_buffer_for_flushing(sock->sk->ft_filter->send_buffer);
 		if(dec_and_check_pending_send_on_send_buffer(sock->sk->ft_filter->send_buffer)){
 			//trace_printk("flushing send buffer of port %d\n", ntohs(sock->sk->ft_filter->tcp_param.dport));
-			flush_send_buffer(sock->sk->ft_filter->send_buffer, sock->sk, 1);
+			flush_send_buffer_first_time(sock->sk->ft_filter->send_buffer, sock->sk);
 		}
 		unlock_send_buffer_for_flushing(sock->sk->ft_filter->send_buffer);
 	}
