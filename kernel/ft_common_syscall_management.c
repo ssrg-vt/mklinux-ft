@@ -618,6 +618,84 @@ void* ft_get_pending_syscall_info(struct ft_pid *pri_after_sec, int id_syscall){
 /* Supposed to be called by secondary replicas to wait for syscall data sent by the primary replica.
  * The data returned is the one identified by the ft_pid of the replica and the syscall_id.
  * It may put the current thread to sleep.
+ * extra_key will be added as info while sleeping, DO NOT free it!
+ * NOTE: do not try to put more than one thread to sleep for the same data, it won't work. This is
+ * designed to allow only the secondary replica itself to sleep while waiting the data from its primary. 
+ */
+void* ft_wait_for_syscall_info_extra_key(struct ft_pid *secondary, int id_syscall, char* extra_key){
+	struct wait_syscall* wait_info;
+        struct wait_syscall* present_info= NULL;
+	char* key;
+        int free_key= 0;
+	void* ret= NULL;
+	u64 time;
+	
+	ft_start_time(&time);
+
+	FTPRINTK("%s called from pid %s\n", __func__, current->pid);
+
+	key= ft_syscall_get_key_from_ft_pid(secondary, id_syscall);
+        if(!key)
+                return ERR_PTR(-ENOMEM);
+
+        wait_info= kmalloc(sizeof(*wait_info), GFP_ATOMIC);
+        if(!wait_info)
+                return ERR_PTR(-ENOMEM);
+
+        wait_info->task= current;
+        wait_info->populated= 0;
+	wait_info->private= NULL;
+	wait_info->extra_key= extra_key;
+
+        if((present_info= ((struct wait_syscall*) ft_syscall_hash_add(key, (void*) wait_info)))){
+		FTPRINTK("%s data present, no need to wait\n", __func__);
+		
+		kfree(extra_key);
+                kfree(wait_info);
+                free_key= 1;
+                goto copy;
+        }
+        else{
+		FTPRINTK("%s: pid %d going to wait for data\n", __func__, current->pid);
+
+                present_info= wait_info;
+                while(present_info->populated==0){
+                        set_current_state(TASK_INTERRUPTIBLE);
+                        if(present_info->populated==0);
+                                schedule();
+                        set_current_state(TASK_RUNNING);
+                }
+		
+		FTPRINTK("%s: data arrived for pid %d \n", __func__, current->pid);
+        }
+
+
+copy:   if(present_info->populated != 1){
+                printk("%s ERROR, entry present in syscall hash but not populated\n", __func__);
+                ret= ERR_PTR(-EFAULT);
+		goto out;
+        }
+	
+	ret= present_info->private;
+
+out:
+	ft_syscall_hash_remove(key);
+        if(free_key)
+                kfree(key);
+	if(present_info->extra_key)
+		kfree(present_info->extra_key);
+        kfree(present_info);
+	
+	ft_end_time(&time);
+	ft_update_time(&time, FT_TIME_RCV_SYSCALL);
+
+        return ret;
+
+
+}
+/* Supposed to be called by secondary replicas to wait for syscall data sent by the primary replica.
+ * The data returned is the one identified by the ft_pid of the replica and the syscall_id.
+ * It may put the current thread to sleep.
  * NOTE: do not try to put more than one thread to sleep for the same data, it won't work. This is
  * designed to allow only the secondary replica itself to sleep while waiting the data from its primary. 
  */
@@ -765,6 +843,39 @@ out:
 
 }
 
+int ft_check_and_set_syscall_extra_key_sleeping(char * key, int *extra_syscall){
+	int ret= 0, i;
+        list_entry_t *head, *app;
+        struct wait_syscall* wait_info;
+
+        spin_lock(&syscall_hash->spinlock);
+
+        for(i=0; i<syscall_hash->size; i++){
+                head= syscall_hash->table[i];
+                if(head){
+			list_for_each_entry(app, &head->list, list){
+				if(!app->obj){
+					ret= -EFAULT;
+					printk("ERROR: %s no obj field\n", __func__);
+					goto out;
+				}
+				wait_info= (struct wait_syscall*) app->obj;
+				if(wait_info->extra_key && (strcmp(wait_info->extra_key, key)==0)){
+					//if wait_info->task is not NULL, a thread is waiting for the syscall
+					if(wait_info->task)
+						ret++;
+				}
+			}
+                }
+        }
+
+out:
+	*extra_syscall= ret;
+        spin_unlock(&syscall_hash->spinlock);
+	return ret;
+
+}
+
 int ft_check_and_set_syscall_extra_key(char * key, int *extra_syscall){
 	int ret= 0, i;
         list_entry_t *head, *app;
@@ -783,7 +894,9 @@ int ft_check_and_set_syscall_extra_key(char * key, int *extra_syscall){
 				}
 				wait_info= (struct wait_syscall*) app->obj;
 				if(wait_info->extra_key && (strcmp(wait_info->extra_key, key)==0)){
-					ret++;
+					//count the one just sent from the primary
+					if(wait_info->task)
+						ret++;
 				}
 			}
                 }
@@ -866,7 +979,7 @@ static int handle_syscall_info_msg(struct pcn_kmsg_message* inc_msg){
 
         if((present_info= ((struct wait_syscall*) ft_syscall_hash_add(key, (void*) wait_info)))){
 		if (present_info->task == NULL) {
-            printk("%s ERROR PRESENT INFO TASK IS NULL %d[%s]\n", __func__, msg->syscall_id, key);
+           		 printk("%s ERROR PRESENT INFO TASK IS NULL %d[%s]\n", __func__, msg->syscall_id, key);
 		
 		} else {
 	                present_info->private= wait_info->private;
@@ -1088,7 +1201,7 @@ int send_bump(struct task_struct *task, int id_syscall, uint64_t prev_tick, uint
     kfree(msg);
     //trace_printk("%d done sending bump\n", task->pid);
     ft_end_time(&time);
-    ft_update_time(&time, FT_TIME_WAIT_BUMP);
+    ft_update_time(&time, FT_TIME_SEND_BUMP);
     return 0;
 }
 
@@ -1097,7 +1210,6 @@ long syscall_hook_enter(struct pt_regs *regs)
         current->current_syscall = regs->orig_ax;
         current->bumped = -1;
         struct popcorn_namespace *ns;
-        u64 time;
 
 	/*
          * System call number is in orig_ax
@@ -1112,8 +1224,8 @@ long syscall_hook_enter(struct pt_regs *regs)
  *            trace_printk("%d[%d] in syscall %d<%d>\n", current->pid, current->ft_det_tick, regs->orig_ax, current->id_syscall);
  *
  */
-	if(ft_is_replicated(current) && (current->current_syscall == 319 || current->current_syscall == 320)|| current->current_syscall == __NR_accept || current->current_syscall == __NR_poll){
-		ft_start_time(&time);
+	if(ft_is_replicated(current) && (current->current_syscall == 319 || current->current_syscall == 320 || current->current_syscall == __NR_accept || current->current_syscall == __NR_accept4 || current->current_syscall == __NR_poll)){
+		ft_start_time(&current->time_stat);
 	}
 	
         if(ft_is_replicated(current) &&
@@ -1143,18 +1255,6 @@ long syscall_hook_enter(struct pt_regs *regs)
 		trace_printk("Syscall %d (sycall id %d) on pid %d tic %u\n", regs->orig_ax, current->id_syscall, current->pid, current->ft_det_tick);
 	*/
 	
-	if(ft_is_replicated(current) && (current->current_syscall == 319 || current->current_syscall == 320)){
-                ft_end_time(&time);
-		if(current->current_syscall == 319)
-			ft_update_time(&time, TOT_TIME_319);
-		if(current->current_syscall == 320)
-			ft_update_time(&time, TOT_TIME_320);
-		if(current->current_syscall == __NR_accept)
-			ft_update_time(&time, TOT_TIME_ACCEPT);
-		if(current->current_syscall == __NR_poll)
-			ft_update_time(&time, TOT_TIME_POLL);
-        }
-
         return regs->orig_ax;
 }
 
@@ -1202,8 +1302,24 @@ void syscall_hook_exit(struct pt_regs *regs)
                 spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
             }
         }
-        current->current_syscall = -1;
+
+	if(ft_is_replicated(current) && (current->current_syscall == 319 || current->current_syscall == 320 || current->current_syscall == __NR_accept || current->current_syscall == __NR_accept4 || current->current_syscall == __NR_poll)){
+		
+                ft_end_time(&current->time_stat);
+		if(current->current_syscall == 319)
+			ft_update_time(&current->time_stat, TOT_TIME_319);
+		if(current->current_syscall == 320)
+			ft_update_time(&current->time_stat, TOT_TIME_320);
+		if(current->current_syscall == __NR_accept)
+			ft_update_time(&current->time_stat, TOT_TIME_ACCEPT);
+		if(current->current_syscall == __NR_poll)
+			ft_update_time(&current->time_stat, TOT_TIME_POLL);
+        }
+
+	current->current_syscall = -1;
         current->bumped = -1;
+
+
 }
 
 static int __init ft_syscall_common_management_init(void) {

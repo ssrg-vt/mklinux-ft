@@ -255,6 +255,8 @@ void ft_send_syscall_info_extra_key(struct ft_pop_rep *replica_group, struct ft_
 void ft_send_syscall_info(struct ft_pop_rep *replica_group, struct ft_pid *primary_pid, int syscall_id, char* syscall_info, unsigned int syscall_info_size);
 //void ft_send_syscall_info_from_work(struct ft_pop_rep *replica_group, struct ft_pid *primary_pid, int syscall_id, char* syscall_info, unsigned int syscall_info_size);
 void* ft_wait_for_syscall_info(struct ft_pid *secondary, int id_syscall);
+void* ft_wait_for_syscall_info_extra_key(struct ft_pid *secondary, int id_syscall, char* extra_key);
+int ft_check_and_set_syscall_extra_key_sleeping(char * key, int *extra_syscall);
 void* ft_get_pending_syscall_info(struct ft_pid *pri_after_sec, int id_syscall);
 void ft_get_key_from_filter(struct net_filter_info *filter, const char* pre_append, char **key, int*key_size);
 int ft_are_syscall_extra_key_present(char * key);

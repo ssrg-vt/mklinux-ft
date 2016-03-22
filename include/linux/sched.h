@@ -1624,6 +1624,7 @@ struct task_struct {
 	int ft_det_state;
 	uint64_t ft_det_tick;
 	long current_syscall;
+	u64 time_stat;
 	int bumped;
 #endif
 };

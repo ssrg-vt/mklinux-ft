@@ -316,7 +316,7 @@ static int after_syscall_rcv_family_primary_after_secondary(struct kiocb *iocb, 
 
         struct rcv_fam_info *syscall_info;
 	struct rcv_fam_info_before *store_info; 
-	int data_size;
+	int data_size= 0;
 #if ENABLE_CHECKSUM
 	char* where_to_copy;
 	int err;
@@ -336,10 +336,12 @@ static int after_syscall_rcv_family_primary_after_secondary(struct kiocb *iocb, 
 		/* in case without errors ret is the actual number of bytes copied.
 		 * size is the maximum bytes allowed to copy.
 		 */
+		#if ENABLE_CHECKSUM
 		if(ret>0)
 			data_size= store_info->size - size + ret;
 		else	
 			data_size= store_info->size - size;
+		#endif
 
 		syscall_info= kmalloc( sizeof(*syscall_info) + data_size+ 1, GFP_KERNEL);
 		if(!syscall_info)
@@ -375,7 +377,7 @@ static int after_syscall_rcv_family_primary_after_secondary(struct kiocb *iocb, 
 		 * In secondary replicas, if retriving data from the stable buffer, the same order of access to the stable buffer must be ensured.
 		 */
 		FTPRINTK("%s pid %d syscall_id %d sending size %d flags %d csum %d ret %d \n", __func__, current->pid, current->id_syscall, syscall_info->size, syscall_info->flags, syscall_info->csum, syscall_info->ret);
-		ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) syscall_info, sizeof(*syscall_info)+ data_size);
+		ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) syscall_info, sizeof(*syscall_info));
 #if ENABLE_CHECKSUM
 	out:
 #endif
@@ -394,7 +396,7 @@ static int after_syscall_rcv_family_primary(struct kiocb *iocb, struct socket *s
 
         struct rcv_fam_info *syscall_info;
 	struct rcv_fam_info_before *store_info; 
-	int data_size;
+	int data_size= 0;
 	char* where_to_copy;
 	int err;
 
@@ -413,10 +415,12 @@ static int after_syscall_rcv_family_primary(struct kiocb *iocb, struct socket *s
 		/* in case without errors ret is the actual number of bytes copied.
 		 * size is the maximum bytes allowed to copy.
 		 */
+		#if ENABLE_CHECKSUM
 		if(ret>0)
 			data_size= ret;
 		else	
 			data_size= 0;
+		#endif
 
 		syscall_info= kmalloc( sizeof(*syscall_info) + data_size+ 1, GFP_KERNEL);
 		if(!syscall_info)
@@ -454,7 +458,7 @@ static int after_syscall_rcv_family_primary(struct kiocb *iocb, struct socket *s
 		 * In secondary replicas, if retriving data from the stable buffer, the same order of access to the stable buffer must be ensured.
 		 */
 		FTPRINTK("%s pid %d syscall_id %d sending size %d flags %d csum %d ret %d \n", __func__, current->pid, current->id_syscall, syscall_info->size, syscall_info->flags, syscall_info->csum, syscall_info->ret);
-		ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) syscall_info, sizeof(*syscall_info)+ data_size);
+		ft_send_syscall_info(current->ft_popcorn, &current->ft_pid, current->id_syscall, (char*) syscall_info, sizeof(*syscall_info));
 out:
 		kfree(syscall_info);
 	}
@@ -1043,14 +1047,26 @@ static int before_syscall_send_family_secondary(struct kiocb *iocb, struct socke
 	struct iovec *iov;
 	int iovlen, err;
 	__wsum my_csum;
+	int size_extra_key;
+	char* extra_key;
 
 	//trace_printk("syscall_id %d size %d on port %d\n", current->id_syscall, (int) size, ntohs(sock->sk->ft_filter->tcp_param.dport));
 
 	lock_send_buffer_to_exclude_flushing(sock->sk->ft_filter->send_buffer);
 
-	sycall_info_primary= (struct send_fam_info *) ft_wait_for_syscall_info(&current->ft_pid, current->id_syscall);
+	ft_get_key_from_filter(sock->sk->ft_filter,"SEND", &extra_key, &size_extra_key);
+	
+	sycall_info_primary= (struct send_fam_info *) ft_wait_for_syscall_info_extra_key(&current->ft_pid, current->id_syscall, extra_key);
 	if(!sycall_info_primary){
 		unlock_send_buffer_to_exclude_flushing(sock->sk->ft_filter->send_buffer);
+		if(is_send_buffer_to_flush(sock->sk->ft_filter->send_buffer)){
+			lock_send_buffer_for_flushing(sock->sk->ft_filter->send_buffer);
+			if(dec_and_check_pending_send_on_send_buffer(sock->sk->ft_filter->send_buffer)){
+				//trace_printk("flushing send buffer of port %d\n", ntohs(sock->sk->ft_filter->tcp_param.dport));
+				flush_send_buffer_first_time(sock->sk->ft_filter->send_buffer, sock->sk);
+			}
+			unlock_send_buffer_for_flushing(sock->sk->ft_filter->send_buffer);
+		}
 		//trace_printk("changing to primary after secondary\n");
 		return before_syscall_send_family_primary_after_secondary(iocb, sock, msg, size, ret);
 	}
