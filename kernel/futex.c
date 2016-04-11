@@ -77,6 +77,7 @@ int __read_mostly futex_cmpxchg_enabled;
 #define FLAGS_CLOCKRT		0x02
 #define FLAGS_HAS_TIMEOUT	0x04
 
+#define LOCK_REPLICATION
 /*
  * Priority Inheritance state:
  */
@@ -1770,17 +1771,20 @@ static void futex_wait_queue_me(struct futex_hash_bucket *hb, struct futex_q *q,
 	set_current_state(TASK_INTERRUPTIBLE);
 
 	smp_mb();
-//#ifndef DETONLY
 	if (is_popcorn(current)) {
 		ns = current->nsproxy->pop_ns;
+#ifdef LOCK_REPLICATION
+		if (current->ft_det_state == FT_DET_ACTIVE) {
+			current->ft_det_state = FT_DET_SLEEP_SYSCALL;
+			mutex_unlock(&ns->gmtx);
+		}
+#else
 		spin_lock(&ns->task_list_lock);
 		current->ft_det_state = FT_DET_INACTIVE;
-		mb();
 		update_token(ns);
-		mb();
 		spin_unlock(&ns->task_list_lock);
+#endif
 	}
-//#endif
 
 	queue_me(q, hb);
 
@@ -1806,15 +1810,14 @@ static void futex_wait_queue_me(struct futex_hash_bucket *hb, struct futex_q *q,
 	}
 	__set_current_state(TASK_RUNNING);
 
-//#ifndef DETONLY
+#ifndef LOCK_REPLICATION
 	if (is_popcorn(current)) {
 		ns = current->nsproxy->pop_ns;
 		spin_lock(&ns->task_list_lock);
-		mb();
 		update_token(ns);
-		mb();
 		spin_unlock(&ns->task_list_lock);
 	}
+#endif
 }
 
 /**
@@ -1839,6 +1842,7 @@ static int futex_wait_setup(u32 __user *uaddr, u32 val, unsigned int flags,
 {
 	u32 uval;
 	int ret;
+	int det = 0;
 
 	/*
 	 * Access the page AFTER the hash-bucket is locked.
@@ -1858,10 +1862,18 @@ static int futex_wait_setup(u32 __user *uaddr, u32 val, unsigned int flags,
 	 * absorb a wakeup if *uaddr does not match the desired values
 	 * while the syscall executes.
 	 */
+	if (current->ft_det_state == FT_DET_COND_WAIT_HINT) {
+		det = 1;
+		__rep_start(current);
+	}
 retry:
 	ret = get_futex_key(uaddr, flags & FLAGS_SHARED, &q->key, VERIFY_READ);
-	if (unlikely(ret != 0))
+	if (unlikely(ret != 0)) {
+		if (det == 1) {
+			__rep_end(current);
+		}
 		return ret;
+	}
 
 retry_private:
 	*hb = queue_lock(q);
@@ -1882,12 +1894,20 @@ retry_private:
 		goto retry;
 	}
 
+	if (is_popcorn(current)) {
+		if (uval > 2)
+			trace_printk("[%d] lele futex_wait %llx - %d %d\n", current->pid, uaddr, uval, val);
+	}
+
 	if (uval != val) {
 		queue_unlock(q, *hb);
 		ret = -EWOULDBLOCK;
 	}
 
 out:
+	if (det == 1) {
+		__rep_end(current);
+	}
 	if (ret)
 		put_futex_key(&q->key);
 	return ret;
@@ -2657,6 +2677,7 @@ long do_futex(u32 __user *uaddr, int op, u32 val, ktime_t *timeout,
 {
 	int ret = -ENOSYS, cmd = op & FUTEX_CMD_MASK;
 	unsigned int flags = 0;
+	unsigned int user_val = 0;
 	struct popcorn_namespace *ns = NULL;
 
 	if (!(op & FUTEX_PRIVATE_FLAG))
@@ -2682,17 +2703,40 @@ long do_futex(u32 __user *uaddr, int op, u32 val, ktime_t *timeout,
 	case FUTEX_WAIT:
 		val3 = FUTEX_BITSET_MATCH_ANY;
 	case FUTEX_WAIT_BITSET:
+#ifdef LOCK_REPLICATION
+		if (is_popcorn(current)) {
+			ns = current->nsproxy->pop_ns;
+			copy_from_user(&user_val, uaddr, sizeof(user_val));
+			if (user_val > 2)
+				trace_printk("[%d] into futex_wait %llx (%lld) - %d %d\n", current->pid, uaddr, user_val, val, val3);
+		}
+#endif
 		ret = futex_wait(uaddr, flags, val, timeout, val3);
-		if (is_popcorn(current) &&
-				(current->ft_det_state == FT_DET_SLEEP_SYSCALL ||
-				 current->ft_det_state == FT_DET_ACTIVE)) {
-			det_wake_up(current);
+		if (is_popcorn(current)) {
+			ns = current->nsproxy->pop_ns;
+#ifdef LOCK_REPLICATION
+			if (current->ft_det_state == FT_DET_SLEEP_SYSCALL) {
+				current->ft_det_state = FT_DET_ACTIVE;
+				mutex_lock(&ns->gmtx);
+			}
+			copy_from_user(&user_val, uaddr, sizeof(user_val));
+			if (user_val > 2)
+				trace_printk("[%d] out futex_wait %llx (%lld) - %d %d\n", current->pid, uaddr, user_val, val, val3);
+#else
+			if (current->ft_det_state == FT_DET_SLEEP_SYSCALL ||
+					current->ft_det_state == FT_DET_ACTIVE) {
+				det_wake_up(current);
+			}
+#endif
 		}
 		break;
 	case FUTEX_WAKE:
 		val3 = FUTEX_BITSET_MATCH_ANY;
 	case FUTEX_WAKE_BITSET:
 		if (is_popcorn(current)) {
+			ns = current->nsproxy->pop_ns;
+			copy_from_user(&user_val, uaddr, sizeof(user_val));
+			trace_printk("[%d] into futex_wake %llx (%lld) - %d %d\n", current->pid, uaddr, user_val, val, val3);
 			ret = futex_wake(uaddr, flags, 1, val3);
 		} else {
 			ret = futex_wake(uaddr, flags, val, val3);

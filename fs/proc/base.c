@@ -2634,12 +2634,19 @@ static int proc_pid_det_state(struct seq_file *m, struct pid_namespace *pidns,
 	spin_lock(&ns->task_list_lock);
 	seq_printf(m, "waiting: %d\n", ns->wait_count);
 	seq_printf(m, "shepherd_bump: %d\n", ns->shepherd_bump);
+#ifdef LOCK_REPLICATION
+	seq_printf(m, "global_rep_id: %llu\n", ns->global_rep_id);
+#endif
 	list_for_each(iter, &ns->ns_task_list.task_list_member) {
 		objPtr = list_entry(iter, struct task_list, task_list_member);
+#ifdef LOCK_REPLICATION
+		seq_printf(m, "%d(%llu)[%d][%d]<%d><%d>[o] -> ", objPtr->task->pid, objPtr->task->rep_id, objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall, objPtr->task->id_syscall);
+#else
 		if (ns->token != NULL && objPtr->task == ns->token->task)
 			seq_printf(m, "%d(%d)[%d][%d]<%d><%d>[o] -> ", objPtr->task->pid, atomic_read(&objPtr->task->ft_det_tick), objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall, objPtr->task->id_syscall);
 		else
 			seq_printf(m, "%d(%d)[%d][%d]<%d><%d>[x] -> ", objPtr->task->pid, atomic_read(&objPtr->task->ft_det_tick), objPtr->task->state, objPtr->task->ft_det_state, objPtr->task->current_syscall, objPtr->task->id_syscall);
+#endif
 	}
 	seq_printf(m, "\n");
 	spin_unlock(&ns->task_list_lock);

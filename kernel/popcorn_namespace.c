@@ -25,16 +25,134 @@
 //#define DET_PROF 1
 
 static struct kmem_cache *popcorn_ns_cachep;
+
 struct proc_dir_entry *res;
-DEFINE_SPINLOCK(ft_lock); 
+DEFINE_SPINLOCK(ft_lock);
+
+/* Create an hash table with size @size.
+ *
+ */
+static hashtable_t* create_hashtable(int size){
+	hashtable_t *ret;
+	hashentry_t **table;
+	int i;
+
+	if(size<1)
+		return ERR_PTR(-EFAULT);
+
+	ret= kmalloc(sizeof(*ret), GFP_KERNEL);
+	if(!ret)
+		return ERR_PTR(-ENOMEM);
+
+	table= kmalloc(sizeof(*table)*size, GFP_KERNEL);
+	if(!table){
+		kfree(ret);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	for(i=0;i<size;i++){
+		table[i]= NULL;
+	}
+
+	ret->size = size;
+	ret->table = table;
+	spin_lock_init(&ret->spinlock);
+
+	return ret;
+}
+
+typedef int (*hashdata_compare_cb)(const void *, const void *);
+
+static void* hash_add(hashtable_t *hashtable, int key, void* obj,
+		hashdata_compare_cb compare) {
+	int hashval;
+	void* entry= NULL;
+	hashentry_t *new, *head, *app;
+
+	new = kmalloc(sizeof(hashentry_t), GFP_ATOMIC);
+	if(!new)
+			return ERR_PTR(-ENOMEM);
+
+	INIT_LIST_HEAD(&new->list);
+	new->obj = obj;
+
+	hashval = key;
+
+	head = hashtable->table[hashval];
+	if (head) {
+		spin_lock(&head->spinlock);
+		list_for_each_entry(app, &head->list, list){
+			if (compare(obj, app->obj)) {
+				entry = app->obj;
+				spin_unlock(&head->spinlock);
+				kfree(new);
+				return entry;
+			}
+		}
+		spin_unlock(&head->spinlock);
+	} else {
+		spin_lock(&hashtable->spinlock);
+		hashtable->table[hashval] = kmalloc(sizeof(hashentry_t), GFP_ATOMIC);
+		if(!hashtable->table[hashval]){
+				spin_unlock(&hashtable->spinlock);
+				kfree(new);
+				return ERR_PTR(-ENOMEM);
+		}
+		head= hashtable->table[hashval];
+		spin_lock_init(&head->spinlock);
+		INIT_LIST_HEAD(&head->list);
+		spin_unlock(&hashtable->spinlock);
+	}
+
+	spin_lock(&head->spinlock);
+	list_add(&new->list, &head->list);
+	spin_unlock(&head->spinlock);
+
+	return NULL;
+}
+
+static void* hash_remove(hashtable_t *hashtable, int key, void *obj,
+		hashdata_compare_cb compare) {
+	int hashval;
+	hashentry_t *head, *app;
+	hashentry_t *entry= NULL;
+
+	hashval= key;
+
+	spin_lock(&hashtable->spinlock);
+	head= hashtable->table[hashval];
+	if(head){
+		list_for_each_entry(app, &head->list, list){
+			if(compare(app->obj, obj)){
+				entry = app;
+				list_del(&app->list);
+				goto out;
+			}
+		}
+	}
+out:
+	spin_unlock(&hashtable->spinlock);
+	if(entry) {
+		obj = entry->obj;
+		kfree(entry);
+	}
+
+	return obj;
+}
+
+#define FTPID_HASH_SIZE 512
+static hashtable_t *global_ftpid_hash;
+
+static int compare_ftpid_entry(const void *data1, const void *data2);
+static inline int choose_key_for_ftpid(const void *data, int32_t size);
 
 struct popcorn_namespace init_pop_ns = {
-	.kref = {
-		.refcount= ATOMIC_INIT(2),
-	},
-	.activate= 0,
-	.root= 0,
-	.replication_degree= 0,
+.kref = {
+	.refcount= ATOMIC_INIT(2),
+},
+.activate= 0,
+.root= 0,
+.replication_degree= 0,
 };
 EXPORT_SYMBOL_GPL(init_pop_ns);
 
@@ -60,6 +178,7 @@ static struct popcorn_namespace *create_popcorn_namespace(struct popcorn_namespa
 
 	kref_init(&ns->kref);
 	init_task_list(ns);
+	init_rep_list(ns);
 	//add_task_to_ns(ns, current);
 	//set_token(ns, current);
 	
@@ -332,7 +451,10 @@ long __det_start(struct task_struct *task)
 	uint64_t dtime;
 #endif
 	u64 time;
-	
+#ifdef LOCK_REPLICATION
+	return 0;
+#endif
+
 	if(!is_popcorn(task) || is_det_sched_disable(task)) {
 		return 0;
 	}
@@ -398,18 +520,27 @@ long __det_start(struct task_struct *task)
 
 asmlinkage long sys_popcorn_det_start(void)
 {
+#ifdef LOCK_REPLICATION
+	return __rep_start(current);
+#else
 	return __det_start(current);
+#endif
 }
 
 asmlinkage long sys_popcorn_det_tick(long tick)
 {
+	struct popcorn_namespace *ns;
 #ifdef DET_PROF
 	uint64_t dtime;
-	ns = current->nsproxy->pop_ns;
 #endif
 
 	if(is_popcorn(current)) {
 	//trace_printk("\n");
+#ifdef LOCK_REPLICATION
+		current->ft_det_state = FT_DET_COND_WAIT_HINT;
+		return 0;
+#endif
+
 #ifdef DET_PROF
 		dtime = (uint64_t) ktime_get().tv64;
 #endif
@@ -434,6 +565,9 @@ long __det_end(struct task_struct *task)
 	unsigned long flags= 0;
 #ifdef DET_PROF
 	uint64_t dtime;
+#endif
+#ifdef LOCK_REPLICATION
+	return 0;
 #endif
 
 	if(!is_popcorn(task)) {
@@ -466,7 +600,264 @@ long __det_end(struct task_struct *task)
 
 asmlinkage long sys_popcorn_det_end(void)
 {
+#ifdef LOCK_REPLICATION
+	return __rep_end(current);
+#else
 	return __det_end(current);
+#endif
+}
+
+long __rep_start(struct task_struct *task)
+{
+	struct popcorn_namespace *ns;
+	int wait_cnt = 0;
+	if(!is_popcorn(task)) {
+		return 0;
+	}
+	ns = task->nsproxy->pop_ns;
+	mutex_lock(&ns->gmtx);
+	for (;;) {
+		task->ft_det_state = FT_DET_ACTIVE;
+		// Let the __rep_end to unlock the mutex, we are serializing the mutex
+		// If the lock ever gets into sleeping, it is going to release the mutex
+		// right before futex_wait.
+		if (ft_is_primary_replica(task)) {
+			// Primary simply falls through.
+			break;
+		} else if (ft_is_secondary_replica(task)) {
+			// Secondary must wait until it sees its turn
+			// Basically it means that the secondary cannot proceed until the primary
+			// successfully acquires the mutex lock (the userspace one).
+			if (wait_rep_turn(ns, task)) {
+				trace_printk("Peeking sync for rep_id %llu, gid %llu for %d\n", task->rep_id, atomic_read(&ns->global_rep_id),
+					choose_key_for_ftpid(&task->ft_pid, FTPID_HASH_SIZE));
+				break;
+			} else {
+				// Keep waiting
+				mutex_unlock(&ns->gmtx);
+				wait_cnt ++;
+				if (wait_cnt < 100) {
+					udelay(5);
+				} else {
+					schedule_timeout(1);
+				}
+				mutex_lock(&ns->gmtx);
+			}
+		}
+	}
+
+	return 1;
+}
+
+long __rep_end(struct task_struct *task)
+{
+	struct popcorn_namespace *ns;
+	if(!is_popcorn(task)) {
+		return 0;
+	}
+
+	ns = task->nsproxy->pop_ns;
+	if (ft_is_primary_replica(task)) {
+		send_rep_turn(ns, task);
+	}
+	atomic_inc(&ns->global_rep_id);
+	task->rep_id++;
+	ns = task->nsproxy->pop_ns;
+	task->ft_det_state = FT_DET_INACTIVE;
+	mutex_unlock(&ns->gmtx);
+}
+
+// Whenever a new thread is created, the task should go to ns
+int add_task_to_ns(struct popcorn_namespace *ns, struct task_struct *task)
+{
+	unsigned long flags;
+	struct task_list *new_task;
+#ifdef LOCK_REPLICATION
+	struct ftpid_hash_entry *new_hash_node;
+#endif
+	//printk("Add %x, %d to ns\n", (unsigned long) task, task->pid);
+	new_task = kmalloc(sizeof(struct task_list), GFP_KERNEL);
+	if (new_task == NULL)
+		return -1;
+
+#ifdef LOCK_REPLICATION
+	task->rep_id = 0;
+	new_hash_node = kmalloc(sizeof(struct ftpid_hash_entry), GFP_KERNEL);
+	if (new_hash_node == NULL)
+		return -1;
+
+	new_hash_node->ft_pid = &task->ft_pid;
+	new_hash_node->ns = ns;
+	trace_printk("Adding %d to hash\n", choose_key_for_ftpid(&task->ft_pid, FTPID_HASH_SIZE));
+	hash_add(global_ftpid_hash,
+			choose_key_for_ftpid(&task->ft_pid, FTPID_HASH_SIZE), new_hash_node,
+			compare_ftpid_entry);
+	new_task->hash_entry = new_hash_node;
+#endif
+
+	task->ft_det_tick = 0;
+	new_task->task = task;
+	if (ns->shepherd != NULL && ns->shepherd->state == TASK_INTERRUPTIBLE &&
+		ft_is_primary_replica(task)) {
+		wake_up_process(ns->shepherd);
+	}
+	spin_lock_irqsave(&ns->task_list_lock, flags);
+	mb();
+	ns->task_count++;
+	list_add_tail(&new_task->task_list_member, &ns->ns_task_list.task_list_member);
+	spin_unlock_irqrestore(&ns->task_list_lock, flags);
+	return 0;
+}
+
+// Whenever a new thread is gone, the task should get deleted
+int remove_task_from_ns(struct popcorn_namespace *ns, struct task_struct *task)
+{
+	struct list_head *iter= NULL;
+	struct list_head *n;
+	struct task_list *objPtr;
+	unsigned long flags;
+
+	spin_lock_irqsave(&ns->task_list_lock, flags);
+	list_for_each_safe(iter, n, &ns->ns_task_list.task_list_member) {
+		objPtr = list_entry(iter, struct task_list, task_list_member);
+		if (objPtr->task == task) {
+			hash_remove(global_ftpid_hash, choose_key_for_ftpid(&objPtr->task->ft_pid, FTPID_HASH_SIZE),
+					objPtr->hash_entry, compare_ftpid_entry);
+			list_del(iter);
+			kfree(iter);
+			update_token(ns);
+			ns->task_count--;
+			spin_unlock_irqrestore(&ns->task_list_lock, flags);
+#ifdef DET_PROF
+			printk("tick_count now for %d %llu %llu %llu\n", task->pid % 64, ns->start_cost[task->pid % 64], ns->tick_cost[task->pid % 64], ns->end_cost[task->pid % 64]);
+			ns->tick_cost[task->pid % 64] = 1;
+			ns->start_cost[task->pid % 64] = 1;
+			ns->end_cost[task->pid % 64] = 1;
+#endif
+			return 0;
+		}
+	}
+	spin_unlock_irqrestore(&ns->task_list_lock, flags);
+
+	return -1;
+}
+
+
+static int compare_ftpid_entry(const void *data1, const void *data2)
+{
+	struct ftpid_hash_entry *e1, *e2;
+	e1 = data1; e2 = data2;
+
+	return (memcmp(e1->ft_pid, e2->ft_pid, sizeof(struct ft_pid)) == 0 ? 1 : 0);
+}
+
+/*
+ * Hash function to generate key from ftpid
+ * @data: the generic data
+ * @size: size of the hash table
+ */
+static inline int choose_key_for_ftpid(const void *data, int32_t size)
+{
+	struct ft_pid *ft_pid;
+	uint32_t hash = 0;
+	size_t i;
+
+	ft_pid = (struct ft_pid *) data;
+	for (i = 0; i < ft_pid->level; i++) {
+		hash += ft_pid->id_array[i];
+		hash += (hash << 10);
+		hash ^= (hash >> 6);
+	}
+
+	hash += ft_pid->level;
+	hash += (hash << 10);
+	hash ^= (hash >> 6);
+
+	hash += (hash << 3);
+	hash ^= (hash >> 11);
+	hash += (hash << 15);
+
+	return hash % size;
+}
+
+struct popcorn_namespace *find_ns_by_ftpid(struct ft_pid *ft_pid)
+{
+	unsigned int hashval;
+	struct ftpid_hash_entry *ftpid_entry;
+	struct popcorn_namespace *ret = NULL;
+	hashentry_t *head, *entry;
+	hashtable_t *hashtable = global_ftpid_hash;
+
+	hashval = choose_key_for_ftpid(ft_pid, FTPID_HASH_SIZE);
+
+	head = hashtable->table[hashval];
+	if(head) {
+		spin_lock(&head->spinlock);
+		list_for_each_entry(entry, &head->list, list) {
+			ftpid_entry = (struct ftpid_hash_entry *) entry->obj;
+			if(are_ft_pid_equals(ft_pid, ftpid_entry->ft_pid)){
+				ret = ftpid_entry->ns;
+				spin_unlock(&head->spinlock);
+				goto out;
+			}
+		}
+		spin_unlock(&head->spinlock);
+	}
+
+out:
+	return ret;
+}
+
+int wait_rep_turn(struct popcorn_namespace *ns, struct task_struct *task)
+{
+	// Must be called with ns->gmtx
+	// It's not waiting actually, just checking if the head of the queue
+	// is what we want.
+	if (peek_rep_list(ns, task->rep_id, atomic_read(&ns->global_rep_id), &task->ft_pid)) {
+		return dequeue_rep_list(ns);
+	}
+
+	return 0;
+}
+
+int send_rep_turn(struct popcorn_namespace *ns, struct task_struct *task)
+{
+	// Must be called with ns->gmtx
+	struct rep_sync_msg *msg;
+	msg = kmalloc(sizeof(struct rep_sync_msg), GFP_KERNEL);
+	if (msg == NULL)
+		return -ENOMEM;
+
+	msg->header.type = PCN_KMSG_TYPE_FT_REPSYNC_INFO;
+	msg->header.prio = PCN_KMSG_PRIO_NORMAL;
+	memcpy(&msg->ft_pid, &task->ft_pid, sizeof(struct ft_pid));
+	msg->rep_id = task->rep_id;
+	msg->global_rep_id = atomic_read(&ns->global_rep_id);
+	mb();
+	trace_printk("Sending sync for rep_id %llu, gid %d for %d\n", msg->rep_id, msg->global_rep_id,
+		choose_key_for_ftpid(&task->ft_pid, FTPID_HASH_SIZE));
+    send_to_all_secondary_replicas(task->ft_popcorn, (struct pcn_kmsg_long_message*) msg, sizeof(struct rep_sync_msg));
+
+	return 0;
+}
+
+static int handle_repsync_msg(struct pcn_kmsg_message *inc_msg)
+{
+	struct rep_sync_msg *msg = (struct rep_sync_msg *) inc_msg;
+	struct ft_pid *ft_pid = &msg->ft_pid;
+	struct popcorn_namespace *ns;
+
+	trace_printk("Got sync for rep_id %llu, gid %llu for %d\n", msg->rep_id, msg->global_rep_id,
+		choose_key_for_ftpid(&msg->ft_pid, FTPID_HASH_SIZE));
+	if ((ns = find_ns_by_ftpid(ft_pid)) == NULL) {
+		trace_printk("Critical error, cannot find corresponding ns\n");
+		pcn_kmsg_free_msg(msg);
+		return 1;
+	}
+
+	enqueue_rep_list(ns, msg->rep_id, msg->global_rep_id, ft_pid);
+	pcn_kmsg_free_msg(msg);
+	return 0;
 }
 
 static int register_popcorn_ns(void)
@@ -494,7 +885,8 @@ static __init int popcorn_namespaces_init(void)
 	}
 	
 	register_popcorn_ns();
-	
+	global_ftpid_hash = create_hashtable(FTPID_HASH_SIZE);
+	pcn_kmsg_register_callback(PCN_KMSG_TYPE_FT_REPSYNC_INFO, handle_repsync_msg);
 	return 0;
 }
 

@@ -569,12 +569,14 @@ static inline int __sock_sendmsg_nosec(struct kiocb *iocb, struct socket *sock,
 		current->bumped = 0;
 		current->id_syscall++;
 		//trace_printk("%d[%d] in syscall %d<%d>\n", current->pid, current->ft_det_tick, current->current_syscall, current->id_syscall);
-		if (ft_is_secondary_replica(current)) {
-			// Wake me up when OSDI ends
-			wait_bump(current);
-		} else if (ft_is_primary_after_secondary_replica(current)) {
-			consume_pending_bump(current);
-		}
+		/*
+		 *if (ft_is_secondary_replica(current)) {
+		 *    // Wake me up when OSDI ends
+		 *    wait_bump(current);
+		 *} else if (ft_is_primary_after_secondary_replica(current)) {
+		 *    consume_pending_bump(current);
+		 *}
+		 */
 	}
 	ft_ret= ft_before_syscall_send_family(iocb, sock, msg, size, &ret);
 	if(ft_ret==FT_SYSCALL_DROP || IS_ERR_VALUE(ft_ret))
@@ -593,7 +595,9 @@ static inline int __sock_sendmsg_nosec(struct kiocb *iocb, struct socket *sock,
 			bump = current->ft_det_tick;
 			spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
 			// Remember, sending a pcn_msg inside a spinlock could lead to a disaster
-			send_bump(current, id_syscall, bump, -1);
+			/*
+			 *send_bump(current, id_syscall, bump, -1);
+			 */
 		}
 		if (current->ft_det_state == FT_DET_SLEEP_SYSCALL ||
 				current->ft_det_state == FT_DET_ACTIVE) {
@@ -760,12 +764,14 @@ static inline int __sock_recvmsg_nosec(struct kiocb *iocb, struct socket *sock,
 		current->bumped = 0;
 		current->id_syscall++;
 		//trace_printk("%d[%d] in syscall %d<%d>\n", current->pid, current->ft_det_tick, current->current_syscall, current->id_syscall);
-		if (ft_is_secondary_replica(current)) {
-			// Wake me up when OSDI ends
-			wait_bump(current);
-		} else if (ft_is_primary_after_secondary_replica(current)) {
-			consume_pending_bump(current);
-		}
+		/*
+		 *if (ft_is_secondary_replica(current)) {
+		 *    // Wake me up when OSDI ends
+		 *    wait_bump(current);
+		 *} else if (ft_is_primary_after_secondary_replica(current)) {
+		 *    consume_pending_bump(current);
+		 *}
+		 */
 	}
 
 	//printk("%s called\n", __func__);
@@ -786,7 +792,9 @@ static inline int __sock_recvmsg_nosec(struct kiocb *iocb, struct socket *sock,
 			bump = current->ft_det_tick;
 			spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
 			// Remember, sending a pcn_msg inside a spinlock could lead to a disaster
-			send_bump(current, id_syscall, bump, -1);
+			/*
+			 *send_bump(current, id_syscall, bump, -1);
+			 */
 		}
 		if (current->ft_det_state == FT_DET_SLEEP_SYSCALL ||
 				current->ft_det_state == FT_DET_ACTIVE) {

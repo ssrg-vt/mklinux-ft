@@ -14,6 +14,7 @@
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
+#include <linux/mutex.h>
 #include <linux/ft_common_syscall_management.h>
 
 // If AGGRESSIVE_DET is enabled, for all the blocking system calls,
@@ -21,6 +22,9 @@
 #define AGGRESSIVE_DET 1
 #define DETONLY
 #define TOKEN_RETRY 20
+
+// The ultimate lock replication mode
+#define LOCK_REPLICATION
 
 //#define DET_PROF 1
 
@@ -33,12 +37,50 @@ int is_popcorn_namespace_active(struct popcorn_namespace* ns);
 static inline int update_token(struct popcorn_namespace *ns);
 long __det_start(struct task_struct *task);
 long __det_end(struct task_struct *task);
+long __rep_start(struct task_struct *task);
+long __rep_end(struct task_struct *task);
+int send_rep_turn(struct popcorn_namespace *ns, struct task_struct *task);
+int wait_rep_turn(struct popcorn_namespace *ns, struct task_struct *task);
 int is_det_sched_disable(struct task_struct *task);
 void disable_det_sched(struct task_struct *task);
+int remove_task_from_ns(struct popcorn_namespace *ns, struct task_struct *task);
+int add_task_to_ns(struct popcorn_namespace *ns, struct task_struct *task);
 
 struct task_list {
 	struct list_head task_list_member;
 	struct task_struct *task;
+	struct ftpid_hash_entry *hash_entry;
+};
+
+struct rep_sync_list {
+	struct list_head rep_sync_member;
+	uint64_t rep_id;
+	uint64_t global_rep_id;
+	struct ft_pid ft_pid;
+};
+
+typedef struct _hashentry {
+	struct list_head list;
+	spinlock_t spinlock;
+	void *obj; //pointer to the object to store
+} hashentry_t;
+
+typedef struct _hashtable {
+	int size;
+	spinlock_t spinlock; //used to lock the whole hash table when adding/removing/looking, not fine grain but effective!
+	hashentry_t **table;
+} hashtable_t;
+
+struct ftpid_hash_entry {
+	struct ft_pid *ft_pid;
+	struct popcorn_namespace *ns;
+};
+
+struct rep_sync_msg {
+	struct pcn_kmsg_hdr header;
+	struct ft_pid ft_pid;
+	uint64_t rep_id;
+	int global_rep_id;
 };
 
 struct popcorn_namespace
@@ -60,6 +102,13 @@ struct popcorn_namespace
 	/* Tasks that are waiting for the token. */
 	int wait_count;
 	uint64_t shepherd_bump;
+#ifdef LOCK_REPLICATION
+	struct mutex gmtx;
+	atomic_t global_rep_id;
+	atomic_t queue_len;
+	spinlock_t rep_queue_lock;
+	struct rep_sync_list ns_rep_list;
+#endif
 #ifdef DET_PROF
 	uint64_t start_cost[64];
 	uint64_t tick_cost[64];
@@ -93,6 +142,76 @@ static inline int is_popcorn(struct task_struct *tsk)
 	}
 
 	return 0;
+}
+
+static inline void init_rep_list(struct popcorn_namespace *ns)
+{
+	mutex_init(&ns->gmtx);
+	INIT_LIST_HEAD(&ns->ns_rep_list.rep_sync_member);
+	spin_lock_init(&ns->rep_queue_lock);
+	atomic_set(&ns->global_rep_id, 0);
+	atomic_set(&ns->queue_len, 0);
+}
+
+static inline int enqueue_rep_list(struct popcorn_namespace *ns, uint64_t rep_id, uint64_t global_rep_id, struct ft_pid *ft_pid)
+{
+	unsigned long flags;
+	struct rep_sync_list *new_sync;
+	new_sync = kmalloc(sizeof(struct rep_sync_list), GFP_KERNEL);
+	if (new_sync == NULL)
+		return -1;
+
+	new_sync->rep_id = rep_id;
+	new_sync->global_rep_id = global_rep_id;
+	memcpy(&new_sync->ft_pid, ft_pid, sizeof(struct ft_pid));
+	spin_lock_irqsave(&ns->rep_queue_lock, flags);
+	atomic_dec(&ns->queue_len);
+	list_add_tail(&new_sync->rep_sync_member, &ns->ns_rep_list.rep_sync_member);
+	spin_unlock_irqrestore(&ns->rep_queue_lock, flags);
+
+	return 1;
+}
+
+static inline int peek_rep_list(struct popcorn_namespace *ns, uint64_t rep_id, uint64_t global_rep_id, struct ft_pid *ft_pid)
+{
+	unsigned long flags;
+	struct rep_sync_list *sync;
+
+	spin_lock_irqsave(&ns->rep_queue_lock, flags);
+	if (list_empty(&ns->ns_rep_list.rep_sync_member)) {
+		spin_unlock_irqrestore(&ns->rep_queue_lock, flags);
+		return 0;
+	}
+	mb();
+	sync = list_first_entry(&ns->ns_rep_list.rep_sync_member, struct rep_sync_list, rep_sync_member);
+	if (sync->rep_id == rep_id &&
+			sync->global_rep_id == global_rep_id &&
+			are_ft_pid_equals(&sync->ft_pid, ft_pid)) {
+		spin_unlock_irqrestore(&ns->rep_queue_lock, flags);
+		return 1;
+	} else {
+		spin_unlock_irqrestore(&ns->rep_queue_lock, flags);
+		return 0;
+	}
+}
+
+static inline int dequeue_rep_list(struct popcorn_namespace *ns)
+{
+	unsigned long flags;
+	struct rep_sync_list *sync;
+
+	spin_lock_irqsave(&ns->rep_queue_lock, flags);
+	atomic_dec(&ns->queue_len);
+	if (list_empty(&ns->ns_rep_list.rep_sync_member)) {
+		spin_unlock_irqrestore(&ns->rep_queue_lock, flags);
+		return 0;
+	}
+	sync = list_first_entry(&ns->ns_rep_list.rep_sync_member, struct rep_sync_list, rep_sync_member);
+	list_del(&sync->rep_sync_member);
+	kfree(sync);
+	spin_unlock_irqrestore(&ns->rep_queue_lock, flags);
+
+	return 1;
 }
 
 static inline void init_task_list(struct popcorn_namespace *ns)
@@ -144,60 +263,6 @@ static inline int set_token(struct popcorn_namespace *ns, struct task_struct *ta
 	return 0;
 }
 
-// Whenever a new thread is created, the task should go to ns
-static inline int add_task_to_ns(struct popcorn_namespace *ns, struct task_struct *task)
-{
-	unsigned long flags;
-	struct task_list *new_task;
-	//printk("Add %x, %d to ns\n", (unsigned long) task, task->pid);
-	new_task = kmalloc(sizeof(struct task_list), GFP_KERNEL);
-	if (new_task == NULL)
-		return -1;
-
-	task->ft_det_tick = 0;
-	new_task->task = task;
-	if (ns->shepherd != NULL && ns->shepherd->state == TASK_INTERRUPTIBLE &&
-		ft_is_primary_replica(task)) {
-		wake_up_process(ns->shepherd);
-	}
-	spin_lock_irqsave(&ns->task_list_lock, flags);
-	mb();
-	ns->task_count++;
-	list_add_tail(&new_task->task_list_member, &ns->ns_task_list.task_list_member);
-	spin_unlock_irqrestore(&ns->task_list_lock, flags);
-	return 0;
-}
-
-// Whenever a new thread is gone, the task should get deleted
-static inline int remove_task_from_ns(struct popcorn_namespace *ns, struct task_struct *task)
-{
-	struct list_head *iter= NULL;
-	struct list_head *n;
-	struct task_list *objPtr;
-	unsigned long flags;
-
-	spin_lock_irqsave(&ns->task_list_lock, flags);
-	list_for_each_safe(iter, n, &ns->ns_task_list.task_list_member) {
-		objPtr = list_entry(iter, struct task_list, task_list_member);
-		if (objPtr->task == task) {
-			list_del(iter);
-			kfree(iter);
-			update_token(ns);
-			ns->task_count--;
-			spin_unlock_irqrestore(&ns->task_list_lock, flags);
-#ifdef DET_PROF
-			printk("tick_count now for %d %llu %llu %llu\n", task->pid % 64, ns->start_cost[task->pid % 64], ns->tick_cost[task->pid % 64], ns->end_cost[task->pid % 64]);
-			ns->tick_cost[task->pid % 64] = 1;
-			ns->start_cost[task->pid % 64] = 1;
-			ns->end_cost[task->pid % 64] = 1;
-#endif
-			return 0;
-		}
-	}
-	spin_unlock_irqrestore(&ns->task_list_lock, flags);
-
-	return -1;
-}
 
 /* Lock should be held before calling this */
 static inline int update_token(struct popcorn_namespace *ns)
@@ -293,7 +358,8 @@ static inline void det_wake_up(struct task_struct *task)
 	unsigned long flags;
 	//int tick;
 	struct popcorn_namespace *ns;
-
+#ifdef LOCK_REPLICATION
+#else
 	ns = task->nsproxy->pop_ns;
 
 	spin_lock_irqsave(&ns->task_list_lock, flags);
@@ -301,6 +367,7 @@ static inline void det_wake_up(struct task_struct *task)
 	spin_unlock_irqrestore(&ns->task_list_lock, flags);
 
 	__det_start(task);
+#endif
 }
 
 //static inline int is_det_active(struct popcorn_namespace *ns, struct task_struct *task);

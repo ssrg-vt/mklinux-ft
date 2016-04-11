@@ -1150,11 +1150,16 @@ void consume_pending_bump(struct task_struct *task)
     }
 }
 
+#define LOCK_REPLICATION
 void wait_bump(struct task_struct *task)
 {
     uint64_t new_tick;
     struct popcorn_namespace *ns;
     ns = task->nsproxy->pop_ns;
+
+#ifdef LOCK_REPLICATION
+	return 0;
+#endif
 
     u64 time;
     ft_start_time(&time);
@@ -1177,6 +1182,10 @@ void wait_bump(struct task_struct *task)
 int send_bump(struct task_struct *task, int id_syscall, uint64_t prev_tick, uint64_t new_tick)
 {
     struct tick_bump_msg *msg;
+
+#ifdef LOCK_REPLICATION
+	return 0;
+#endif
 
     u64 time;
     ft_start_time(&time);    

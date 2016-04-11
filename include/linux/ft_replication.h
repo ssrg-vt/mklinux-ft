@@ -17,6 +17,7 @@
 #include <linux/eventpoll.h>
 
 #define FT_POPCORN
+#define LOCK_REPLICATION
 
 #define SUPPORT_FOR_CLUSTERING
 /* int replica_type of struct task_struct can be only one of the 
