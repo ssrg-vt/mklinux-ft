@@ -837,6 +837,7 @@ int send_rep_turn(struct popcorn_namespace *ns, struct task_struct *task)
 	trace_printk("Sending sync for rep_id %llu, gid %d for %d\n", msg->rep_id, msg->global_rep_id,
 		choose_key_for_ftpid(&task->ft_pid, FTPID_HASH_SIZE));
     send_to_all_secondary_replicas(task->ft_popcorn, (struct pcn_kmsg_long_message*) msg, sizeof(struct rep_sync_msg));
+	kfree(msg);
 
 	return 0;
 }
