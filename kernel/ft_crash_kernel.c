@@ -18,6 +18,13 @@
 #include <linux/debugfs.h>
 #include <linux/mm.h>
 
+char inet_address_eth0[]= "10.1.1.47";
+//#define RECOVER_ETH1 0
+
+#ifdef RECOVER_ETH1
+char inet_address_eth1[]= "192.168.1.1";
+#endif
+
 struct crash_kernel_notification_msg{
         struct pcn_kmsg_hdr header;
 };

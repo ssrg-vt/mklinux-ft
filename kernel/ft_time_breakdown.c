@@ -21,6 +21,11 @@ struct time_statistics{
 
 struct time_statistics breackdown_times[MAX_BREACKDOWNS];
 
+asmlinkage long sys_print_current_time(void){
+	printk("%s : %u\n", __func__, cpu_clock(home_kernel));
+	return 0;
+}
+
 void ft_start_time(u64 *time){
         *time= cpu_clock(home_kernel);
 	//trace_printk("%pS\n", __builtin_return_address(0));

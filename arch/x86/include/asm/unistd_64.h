@@ -706,6 +706,8 @@ __SYSCALL(__NR_popcorn_det_start, sys_popcorn_det_start)
 __SYSCALL(__NR_popcorn_det_end, sys_popcorn_det_end)
 #define __NR_popcorn_det_tick       321
 __SYSCALL(__NR_popcorn_det_tick, sys_popcorn_det_tick)
+#define __NR_print_current_time	322
+__SYSCALL(__NR_print_current_time, sys_print_current_time)
 
 #ifndef __NO_STUBS
 #define __ARCH_WANT_OLD_READDIR

@@ -565,9 +565,11 @@ static inline int __sock_sendmsg_nosec(struct kiocb *iocb, struct socket *sock,
 	si->size = size;
 
 #ifdef FT_POPCORN
-	if(ft_is_replicated(current)) {
+	if(ft_is_replicated(current) && sock->sk->ft_filter) {
 		current->bumped = 0;
 		current->id_syscall++;
+	
+		//printk("sndmsg (sycall id %d) on pid %d tic %u\n", current->id_syscall, current->pid, current->ft_det_tick);
 		//trace_printk("%d[%d] in syscall %d<%d>\n", current->pid, current->ft_det_tick, current->current_syscall, current->id_syscall);
 		/*
 		 *if (ft_is_secondary_replica(current)) {
@@ -586,7 +588,7 @@ static inline int __sock_sendmsg_nosec(struct kiocb *iocb, struct socket *sock,
 
 #ifdef FT_POPCORN
 	ft_after_syscall_send_family(sock, ret);
-	if(ft_is_replicated(current)) {
+	if(ft_is_replicated(current) && sock->sk->ft_filter ) {
 		if (ft_is_primary_replica(current)) {
 			// Wake up the other guy
 			spin_lock_irqsave(&current->nsproxy->pop_ns->task_list_lock, flags);
@@ -760,9 +762,10 @@ static inline int __sock_recvmsg_nosec(struct kiocb *iocb, struct socket *sock,
 	si->flags = flags;
 
 #ifdef FT_POPCORN
-	if(ft_is_replicated(current)) {
+	if(ft_is_replicated(current) && sock->sk->ft_filter ) {
 		current->bumped = 0;
 		current->id_syscall++;
+		//printk("rcv msg (sycall id %d) on pid %d tic %u\n", current->id_syscall, current->pid, current->ft_det_tick);
 		//trace_printk("%d[%d] in syscall %d<%d>\n", current->pid, current->ft_det_tick, current->current_syscall, current->id_syscall);
 		/*
 		 *if (ft_is_secondary_replica(current)) {
@@ -783,7 +786,7 @@ static inline int __sock_recvmsg_nosec(struct kiocb *iocb, struct socket *sock,
 
 #ifdef FT_POPCORN
         ft_after_syscall_rcv_family(iocb, sock, msg, size, flags, ret);
-	if(ft_is_replicated(current)) {
+	if(ft_is_replicated(current) && sock->sk->ft_filter) {
 		if (ft_is_primary_replica(current)) {
 			// Wake up the other guy
 			spin_lock_irqsave(&current->nsproxy->pop_ns->task_list_lock, flags);

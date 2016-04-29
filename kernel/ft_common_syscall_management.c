@@ -1085,7 +1085,7 @@ static uint64_t wait_for_bump_info(struct task_struct *task)
     key = tickbump_get_key(&task->ft_pid.ft_pop_id, task->ft_pid.level, task->ft_pid.id_array, task->id_syscall, task->ft_det_tick);
     if (!key)
         return -1;
-    //trace_printk("%d wait bump %s, on %d[%d]<%d>\n", task->pid, key, task->ft_det_tick, task->id_syscall, task->current_syscall);
+    trace_printk("%d wait bump %s, on %d[%d]<%d>\n", task->pid, key, task->ft_det_tick, task->id_syscall, task->current_syscall);
 
     wait_info = kmalloc(sizeof(struct wait_bump_info), GFP_ATOMIC);
     wait_info->task = task;
@@ -1189,7 +1189,7 @@ int send_bump(struct task_struct *task, int id_syscall, uint64_t prev_tick, uint
 
     u64 time;
     ft_start_time(&time);    
-    //trace_printk("%d is bumping %d to %d [%d]<%d>\n", task->pid, prev_tick, new_tick, id_syscall, task->current_syscall);
+    trace_printk("%d is bumping %d to %d [%d]<%d>\n", task->pid, prev_tick, new_tick, id_syscall, task->current_syscall);
     msg = kmalloc(sizeof(struct tick_bump_msg), GFP_KERNEL);
     if (!msg)
         return -ENOMEM;
@@ -1252,18 +1252,18 @@ long syscall_hook_enter(struct pt_regs *regs)
             current->id_syscall++;
             current->bumped = 0;
             spin_unlock(&ns->task_list_lock);
-            if (ft_is_secondary_replica(current)) {
-                // Wake me up when OSDI ends
-                wait_bump(current);
-            } else if (ft_is_primary_after_secondary_replica(current)) {
-                consume_pending_bump(current);
-            }
-        }
+           trace_printk("%s Syscall %d (sycall id %d) on pid %d tic %u\n", __func__, regs->orig_ax, current->id_syscall, current->pid, current->ft_det_tick);
+		/*
+		 *if (ft_is_secondary_replica(current)) {
+		 *        // Wake me up when OSDI ends
+		 *        wait_bump(current);
+		 *    } else if (ft_is_primary_after_secondary_replica(current)) {
+		 *        consume_pending_bump(current);
+		 *    }
+		 */
 
-	/*if(ft_is_replicated(current))
-		trace_printk("Syscall %d (sycall id %d) on pid %d tic %u\n", regs->orig_ax, current->id_syscall, current->pid, current->ft_det_tick);
-	*/
-	
+		}
+
         return regs->orig_ax;
 }
 
@@ -1273,7 +1273,8 @@ void syscall_hook_exit(struct pt_regs *regs)
         int id_syscall = 0;
         unsigned long flags;
         // System call number is in ax
-        if(ft_is_replicated(current) &&
+        
+	if(ft_is_replicated(current) &&
                 // TODO: orgnize those syscalls in a better way, avoid this tidious if conditions
                    (current->current_syscall == __NR_gettimeofday ||
                     current->current_syscall == __NR_epoll_wait ||
@@ -1283,15 +1284,20 @@ void syscall_hook_exit(struct pt_regs *regs)
                     current->current_syscall == __NR_accept4 ||
                     current->current_syscall == __NR_bind ||
                     current->current_syscall == __NR_listen)) {
-            if (ft_is_primary_replica(current)) {
-                // Wake up the other guy
-                spin_lock_irqsave(&current->nsproxy->pop_ns->task_list_lock, flags);
-                bump = current->ft_det_tick;
-                id_syscall = current->id_syscall;
-                current->bumped = 1;
-                spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
-                send_bump(current, id_syscall, bump, -1);
-            }
+          
+	    trace_printk("%s Syscall %d (sycall id %d) on pid %d tic %u\n", __func__, current->current_syscall, current->id_syscall, current->pid, current->ft_det_tick);
+
+		/*
+		 *if (ft_is_primary_replica(current)) {
+         *        // Wake up the other guy
+         *        spin_lock_irqsave(&current->nsproxy->pop_ns->task_list_lock, flags);
+         *        bump = current->ft_det_tick;
+         *        id_syscall = current->id_syscall;
+         *        current->bumped = 1;
+         *        spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
+         *        send_bump(current, id_syscall, bump, -1);
+         *    }
+		 */
 
             /*
              * This means the syscall is wrapped inside a det section, however the syscall may
@@ -1302,14 +1308,16 @@ void syscall_hook_exit(struct pt_regs *regs)
              *
              * Alright futex is handled inside the do_futex.
              */
-            spin_lock_irqsave(&current->nsproxy->pop_ns->task_list_lock, flags);
-            if (current->ft_det_state == FT_DET_SLEEP_SYSCALL ||
-                    current->ft_det_state == FT_DET_ACTIVE) {
-                spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
-                det_wake_up(current);
-            } else {
-                spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
-            }
+			/*
+             *spin_lock_irqsave(&current->nsproxy->pop_ns->task_list_lock, flags);
+             *if (current->ft_det_state == FT_DET_SLEEP_SYSCALL ||
+             *        current->ft_det_state == FT_DET_ACTIVE) {
+             *    spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
+             *    det_wake_up(current);
+             *} else {
+             *    spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
+             *}
+			 */
         }
 
 	if(ft_is_replicated(current) && (current->current_syscall == 319 || current->current_syscall == 320 || current->current_syscall == __NR_accept || current->current_syscall == __NR_accept4 || current->current_syscall == __NR_poll)){

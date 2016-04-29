@@ -258,6 +258,14 @@ int ft_syscall_accept_after(struct request_sock_queue *queue, struct sock *paren
 	
 	if(ft_is_replicated(current)){
 
+		/* Just a check to be sure that the sock that is using is replicated too...
+                 *
+                 */
+                if(!parent->ft_filter){
+                        trace_printk("WARNING: current is replicated (pid %d) but sock is not\n", current->pid);
+                        return FT_SYSCALL_CONTINUE;
+                }
+
                 if( ft_is_primary_replica(current) || ft_is_primary_after_secondary_replica(current)){
 			return ft_syscall_accept_primary_after(queue, parent, err, newsk);
 		}
@@ -284,6 +292,14 @@ int ft_syscall_accept_after(struct request_sock_queue *queue, struct sock *paren
 int ft_syscall_accept_before(struct request_sock_queue *queue, struct sock *parent, int flags, int* err, struct sock **newsk){
 	
 	if(ft_is_replicated(current)){
+
+		/* Just a check to be sure that the sock that is using is replicated too...
+	         *
+        	 */
+        	if(!parent->ft_filter){
+                	trace_printk("WARNING: current is replicated (pid %d) but sock is not\n", current->pid);
+                	return FT_SYSCALL_CONTINUE;
+        	}
 
                 if( ft_is_primary_replica(current) ){
 			return ft_syscall_accept_primary_before(queue, parent, flags, err, newsk);
@@ -471,7 +487,16 @@ out:
 static int after_syscall_rcv_family_replicated_sock(struct kiocb *iocb, struct socket *sock,
                                        struct msghdr *msg, size_t size, int flags, int ret){
 
-        if(ft_is_primary_replica(current) || (sock->sk && sock->sk->ft_filter && ft_is_filter_primary(sock->sk->ft_filter))){
+	/* Just a check to be sure that the sock that is using is replicated too...
+         *
+         */
+        struct sock *sk= sock->sk;
+        if(!sk || !sk->ft_filter){
+                trace_printk("WARNING: current is replicated (pid %d) but sock is not\n", current->pid);
+                return FT_SYSCALL_CONTINUE;
+        }
+
+        if(ft_is_primary_replica(current) || ft_is_filter_primary(sock->sk->ft_filter)){
                 return after_syscall_rcv_family_primary(iocb, sock, msg, size, flags, ret);
         }
 	
@@ -874,13 +899,13 @@ out:
 static int before_syscall_rcv_family_replicated_sock(struct kiocb *iocb, struct socket *sock,
                                        struct msghdr *msg, size_t size, int flags, int* ret){
 
-        /* Just a check to be sure that the sock that is using is replicated too...
+	/* Just a check to be sure that the sock that is using is replicated too...
          *
          */
         struct sock *sk= sock->sk;
         if(!sk || !sk->ft_filter){
-                printk("ERROR: %s current is replicated (pid %d) but sock is not\n", __func__, current->pid);
-                return -EFAULT;
+                trace_printk("WARNING: current is replicated (pid %d) but sock is not\n", current->pid);
+                return FT_SYSCALL_CONTINUE;
         }
 
         // Increase the syscall count
@@ -948,7 +973,16 @@ static int after_syscall_send_family_primary(struct socket* sock, int ret){
 
 static int after_syscall_send_family_replicated_sock(struct socket *sock, int ret){
 
-	if(ft_is_primary_replica(current) || (sock->sk && sock->sk->ft_filter && ft_is_filter_primary(sock->sk->ft_filter)) || ft_is_primary_after_secondary_replica(current)){
+	 /* Just a check to be sure that the sock that is using is replicated too...
+         *
+         */
+        struct sock *sk= sock->sk;
+        if(!sk || !sk->ft_filter){
+                trace_printk("WARNING: current is replicated (pid %d) but sock is not\n", current->pid);
+                return FT_SYSCALL_CONTINUE;
+        }
+
+	if(ft_is_primary_replica(current) || ft_is_filter_primary(sk->ft_filter) || ft_is_primary_after_secondary_replica(current)){
                 return after_syscall_send_family_primary(sock, ret);
         }
 
@@ -1167,8 +1201,8 @@ static int before_syscall_send_family_replicated_sock(struct kiocb *iocb, struct
 	 */
 	struct sock *sk= sock->sk;
 	if(!sk || !sk->ft_filter){
-		printk("ERROR: %s current is replicated (pid %d) but sock is not\n", __func__, current->pid);
-		return -EFAULT;
+		trace_printk("WARNING: %s current is replicated (pid %d) but sock is not\n", __func__, current->pid);
+		return FT_SYSCALL_CONTINUE;
 	}
 
     	// Increase the syscall count

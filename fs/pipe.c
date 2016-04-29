@@ -364,18 +364,21 @@ pipe_read(struct kiocb *iocb, const struct iovec *_iov,
 	uint64_t bump;
 
 #ifdef FT_POPCORN
-	__det_start(current);
-	if(ft_is_replicated(current)) {
-		current->bumped = 0;
-		current->id_syscall++;
-		mb();
-		if (ft_is_secondary_replica(current)) {
-			// Wake me up when OSDI ends
-			wait_bump(current);
-		} else if (ft_is_primary_after_secondary_replica(current)) {
-			consume_pending_bump(current);
-		}
-	}
+	/*
+	 *__det_start(current);
+	 *if(ft_is_replicated(current)) {
+	 *    current->bumped = 0;
+	 *    current->id_syscall++;
+	 *    //printk("pipe read (sycall id %d) on pid %d tic %u\n", current->id_syscall, current->pid, current->ft_det_tick);
+	 *    mb();
+	 *    if (ft_is_secondary_replica(current)) {
+	 *        // Wake me up when OSDI ends
+	 *        wait_bump(current);
+	 *    } else if (ft_is_primary_after_secondary_replica(current)) {
+	 *        consume_pending_bump(current);
+	 *    }
+	 *}
+	 */
 #endif
 
 	total_len = iov_length(iov, nr_segs);
@@ -480,24 +483,26 @@ redo:
 
 out_read:
 #ifdef FT_POPCORN
-	if(ft_is_replicated(current)) {
-		if (ft_is_primary_replica(current)) {
-			// Wake up the other guy
-			spin_lock_irqsave(&current->nsproxy->pop_ns->task_list_lock, flags);
-			current->bumped = 1;
-			id_syscall = current->id_syscall;
-			mb();
-			bump = current->ft_det_tick;
-			spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
-			// Remember, sending a pcn_msg inside a spinlock could lead to a disaster
-			send_bump(current, id_syscall, bump, -1);
-		}
-		if (current->ft_det_state == FT_DET_SLEEP_SYSCALL ||
-				current->ft_det_state == FT_DET_ACTIVE) {
-			det_wake_up(current);
-		}
-	}
-	__det_end(current);
+	/*
+	 *if(ft_is_replicated(current)) {
+	 *    if (ft_is_primary_replica(current)) {
+	 *        // Wake up the other guy
+	 *        spin_lock_irqsave(&current->nsproxy->pop_ns->task_list_lock, flags);
+	 *        current->bumped = 1;
+	 *        id_syscall = current->id_syscall;
+	 *        mb();
+	 *        bump = current->ft_det_tick;
+	 *        spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
+	 *        // Remember, sending a pcn_msg inside a spinlock could lead to a disaster
+	 *        send_bump(current, id_syscall, bump, -1);
+	 *    }
+	 *    if (current->ft_det_state == FT_DET_SLEEP_SYSCALL ||
+	 *            current->ft_det_state == FT_DET_ACTIVE) {
+	 *        det_wake_up(current);
+	 *    }
+	 *}
+	 *__det_end(current);
+	 */
 #endif
 
 	return ret;
@@ -520,17 +525,20 @@ pipe_write(struct kiocb *iocb, const struct iovec *_iov,
 	uint64_t bump;
 
 #ifdef FT_POPCORN
-	__det_start(current);
-	if(ft_is_replicated(current)) {
-		current->bumped = 0;
-		current->id_syscall++;
-		if (ft_is_secondary_replica(current)) {
-			// Wake me up when OSDI ends
-			wait_bump(current);
-		} else if (ft_is_primary_after_secondary_replica(current)) {
-			consume_pending_bump(current);
-		}
-	}
+	/*
+	 *__det_start(current);
+	 *if(ft_is_replicated(current)) {
+	 *    current->bumped = 0;
+	 *    current->id_syscall++;
+	 *    //printk("pipe write (sycall id %d) on pid %d tic %u\n", current->id_syscall, current->pid, current->ft_det_tick);
+	 *    if (ft_is_secondary_replica(current)) {
+	 *        // Wake me up when OSDI ends
+	 *        wait_bump(current);
+	 *    } else if (ft_is_primary_after_secondary_replica(current)) {
+	 *        consume_pending_bump(current);
+	 *    }
+	 *}
+	 */
 #endif
 
 	total_len = iov_length(iov, nr_segs);
@@ -693,23 +701,25 @@ out:
 		file_update_time(filp);
 out_write:
 #ifdef FT_POPCORN
-	if(ft_is_replicated(current)) {
-		if (ft_is_primary_replica(current)) {
-			// Wake up the other guy
-			spin_lock_irqsave(&current->nsproxy->pop_ns->task_list_lock, flags);
-			current->bumped = 1;
-			bump = current->ft_det_tick;
-			id_syscall = current->id_syscall;
-			spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
-			// Remember, sending a pcn_msg inside a spinlock could lead to a disaster
-			send_bump(current, id_syscall, bump, -1);
-		}
-		if (current->ft_det_state == FT_DET_SLEEP_SYSCALL ||
-				current->ft_det_state == FT_DET_ACTIVE) {
-			det_wake_up(current);
-		}
-	}
-	__det_end(current);
+	/*
+	 *if(ft_is_replicated(current)) {
+	 *    if (ft_is_primary_replica(current)) {
+	 *        // Wake up the other guy
+	 *        spin_lock_irqsave(&current->nsproxy->pop_ns->task_list_lock, flags);
+	 *        current->bumped = 1;
+	 *        bump = current->ft_det_tick;
+	 *        id_syscall = current->id_syscall;
+	 *        spin_unlock_irqrestore(&current->nsproxy->pop_ns->task_list_lock, flags);
+	 *        // Remember, sending a pcn_msg inside a spinlock could lead to a disaster
+	 *        send_bump(current, id_syscall, bump, -1);
+	 *    }
+	 *    if (current->ft_det_state == FT_DET_SLEEP_SYSCALL ||
+	 *            current->ft_det_state == FT_DET_ACTIVE) {
+	 *        det_wake_up(current);
+	 *    }
+	 *}
+	 *__det_end(current);
+	 */
 #endif
 
 	return ret;

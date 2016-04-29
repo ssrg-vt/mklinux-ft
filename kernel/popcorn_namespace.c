@@ -833,10 +833,8 @@ int send_rep_turn(struct popcorn_namespace *ns, struct task_struct *task)
 	msg->rep_id = task->rep_id;
 	msg->global_rep_id = atomic_read(&ns->global_rep_id);
 	mb();
-	/*
-	 *trace_printk("Sending sync for rep_id %llu, gid %d for %d\n", msg->rep_id, msg->global_rep_id,
-	 *    choose_key_for_ftpid(&task->ft_pid, FTPID_HASH_SIZE));
-	 */
+	trace_printk("Sending sync for rep_id %llu, gid %d for %d\n", msg->rep_id, msg->global_rep_id,
+		choose_key_for_ftpid(&task->ft_pid, FTPID_HASH_SIZE));
     send_to_all_secondary_replicas(task->ft_popcorn, (struct pcn_kmsg_long_message*) msg, sizeof(struct rep_sync_msg));
 	kfree(msg);
 
@@ -849,10 +847,8 @@ static int handle_repsync_msg(struct pcn_kmsg_message *inc_msg)
 	struct ft_pid *ft_pid = &msg->ft_pid;
 	struct popcorn_namespace *ns;
 
-	/*
-	 *trace_printk("Got sync for rep_id %llu, gid %llu for %d\n", msg->rep_id, msg->global_rep_id,
-	 *    choose_key_for_ftpid(&msg->ft_pid, FTPID_HASH_SIZE));
-	 */
+	trace_printk("Got sync for rep_id %llu, gid %llu for %d\n", msg->rep_id, msg->global_rep_id,
+		choose_key_for_ftpid(&msg->ft_pid, FTPID_HASH_SIZE));
 	if ((ns = find_ns_by_ftpid(ft_pid)) == NULL) {
 		trace_printk("Critical error, cannot find corresponding ns\n");
 		pcn_kmsg_free_msg(msg);
