@@ -25,6 +25,7 @@
 //#define DET_PROF 1
 
 static struct kmem_cache *popcorn_ns_cachep;
+static struct popcorn_namespace *last_ns = NULL;
 
 struct proc_dir_entry *res;
 DEFINE_SPINLOCK(ft_lock);
@@ -786,6 +787,21 @@ struct popcorn_namespace *find_ns_by_ftpid(struct ft_pid *ft_pid)
 	struct popcorn_namespace *ret = NULL;
 	hashentry_t *head, *entry;
 	hashtable_t *hashtable = global_ftpid_hash;
+	struct list_head *iter= NULL;
+	struct task_list *objPtr;
+
+	// Let's guess ns first!
+	ret = last_ns;
+	if (ret != NULL) {
+		list_for_each(iter, &ret->ns_task_list.task_list_member) {
+			objPtr = list_entry(iter, struct task_list, task_list_member);
+			if (objPtr->task->ft_pid.ft_pop_id.id == ft_pid->ft_pop_id.id) {
+				last_ns = ret;
+				return ret;
+			}
+		}
+	}
+	ret = NULL;
 
 	hashval = choose_key_for_ftpid(ft_pid, FTPID_HASH_SIZE);
 
@@ -797,6 +813,7 @@ struct popcorn_namespace *find_ns_by_ftpid(struct ft_pid *ft_pid)
 			if(are_ft_pid_equals(ft_pid, ftpid_entry->ft_pid)){
 				ret = ftpid_entry->ns;
 				spin_unlock(&head->spinlock);
+				last_ns = ret;
 				goto out;
 			}
 		}
