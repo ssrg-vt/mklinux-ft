@@ -538,7 +538,13 @@ asmlinkage long sys_popcorn_det_tick(long tick)
 	if(is_popcorn(current)) {
 	//trace_printk("\n");
 #ifdef LOCK_REPLICATION
-		current->ft_det_state = FT_DET_COND_WAIT_HINT;
+		switch (tick) {
+		case 0:
+			current->ft_det_state = FT_DET_COND_WAIT_HINT;
+			break;
+		case 1:
+			current->ft_det_state = FT_DET_SKIP;
+		}
 		return 0;
 #endif
 
@@ -612,7 +618,8 @@ long __rep_start(struct task_struct *task)
 {
 	struct popcorn_namespace *ns;
 	int wait_cnt = 0;
-	if(!is_popcorn(task)) {
+	if(!is_popcorn(task) ||
+			task->ft_det_state == FT_DET_SKIP) {
 		return 0;
 	}
 	ns = task->nsproxy->pop_ns;
@@ -654,6 +661,11 @@ long __rep_end(struct task_struct *task)
 {
 	struct popcorn_namespace *ns;
 	if(!is_popcorn(task)) {
+		return 0;
+	}
+
+	if (task->ft_det_state == FT_DET_SKIP) {
+		task->ft_det_state = FT_DET_INACTIVE;
 		return 0;
 	}
 

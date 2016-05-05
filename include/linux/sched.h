@@ -204,6 +204,7 @@ print_cfs_rq(struct seq_file *m, int cpu, struct cfs_rq *cfs_rq)
 #define FT_DET_ACTIVE 3
 #define FT_DET_SLEEP_SYSCALL 4
 #define FT_DET_COND_WAIT_HINT 16
+#define FT_DET_SKIP 32
 
 #define TASK_STATE_TO_CHAR_STR "RSDTtZXxKW"
 
