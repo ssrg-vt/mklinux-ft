@@ -295,6 +295,7 @@ struct sock *inet_csk_accept(struct sock *sk, int flags, int *err)
 
 #ifdef FT_POPCORN
         ft_ret = ft_syscall_accept_before(&icsk->icsk_accept_queue, sk, flags, err, &newsk);
+		error = *err;
         if(ft_ret == FT_SYSCALL_DROP ||  IS_ERR_VALUE(ft_ret)){
 		if(ft_ret == FT_SYSCALL_DROP) 
 			goto out;

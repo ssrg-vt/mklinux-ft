@@ -79,6 +79,7 @@ static int ft_syscall_accept_primary_before(struct request_sock_queue *queue, st
                 if (error)
                         goto out_err;
         }
+	*err = error;
 	return FT_SYSCALL_CONTINUE;
 
 out_err:
@@ -96,6 +97,7 @@ out_err:
                 kfree(sys_info);
         }
 
+	*err = error;
 	return error;      
 
 }
