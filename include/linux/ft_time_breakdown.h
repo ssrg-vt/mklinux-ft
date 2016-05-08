@@ -9,7 +9,7 @@
 
 #include <linux/types.h>
 
-#define FT_BREAKDOWN_TIME 1
+#define FT_BREAKDOWN_TIME 0
 
 #define FT_TIME_HOOK_BEF_NET 0
 #define FT_TIME_BEF_NET_REP 1
@@ -51,6 +51,7 @@ int print_ft_time_breakdown(void);
 static void inline ft_start_time(u64 *time){}
 static void inline ft_end_time(u64 *time){}
 static void inline ft_update_time(u64 *time, unsigned int type){}
+static int inline print_ft_time_breakdown(void){return 0;}
 
 #endif
 

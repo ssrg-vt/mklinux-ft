@@ -8,7 +8,6 @@
 #include <linux/proc_fs.h>
 #include <linux/sched.h>
 
-#if FT_BREAKDOWN_TIME
 static int home_kernel;
 
 struct time_statistics{
@@ -22,10 +21,13 @@ struct time_statistics{
 struct time_statistics breackdown_times[MAX_BREACKDOWNS];
 
 asmlinkage long sys_print_current_time(void){
+#if FT_BREAKDOWN_TIME
 	printk("%s : %u\n", __func__, cpu_clock(home_kernel));
+#endif
 	return 0;
 }
 
+#if FT_BREAKDOWN_TIME
 void ft_start_time(u64 *time){
         *time= cpu_clock(home_kernel);
 	//trace_printk("%pS\n", __builtin_return_address(0));
@@ -56,22 +58,26 @@ again4: old= breackdown_times[type].max;
                 	 goto again4;
 	}
 }
+#endif
 
 extern void init_net_stat(void);
 
 void init_breackdown(void){
 	int i;
 
+#if FT_BREAKDOWN_TIME
 	for(i=0; i<MAX_BREACKDOWNS; i++){
 		breackdown_times[i].min= ~0;
 		breackdown_times[i].max= 0;
 		breackdown_times[i].tot= 0;
 		breackdown_times[i].count= 0;
 	}
+#endif
 }
 
 int write_ft_time_breakdown(struct file *file, const char __user *buffer, unsigned long count, void *data)
 {
+#if FT_BREAKDOWN_TIME
  	long action;
 
         kstrtol_from_user(buffer, count, 0, &action);
@@ -81,9 +87,11 @@ int write_ft_time_breakdown(struct file *file, const char __user *buffer, unsign
 		init_net_stat();
 	}
 
+#endif
 	return count;
 }
 
+#if FT_BREAKDOWN_TIME
 int print_ft_time_breakdown(void){
 	int i;
 
@@ -97,6 +105,7 @@ int print_ft_time_breakdown(void){
 
 	return 0;
 }
+#endif
 
 int read_ft_time_breakdown(char *page, char **start, off_t off, int count, int *eof, void *data)
 {
@@ -142,5 +151,3 @@ static int __init ft_time_breakdown_init(void){
 }
 
 late_initcall(ft_time_breakdown_init);
-
-#endif

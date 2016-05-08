@@ -48,6 +48,7 @@ typedef struct _list_entry{
         struct list_head list;
         char *string; //key
         void *obj; //pointer to the object to store
+        spinlock_t slock;
 } list_entry_t;
 
 typedef struct _hash_table{
@@ -1320,17 +1321,17 @@ void syscall_hook_exit(struct pt_regs *regs)
 			 */
         }
 
-	if(ft_is_replicated(current) && (current->current_syscall == 319 || current->current_syscall == 320 || current->current_syscall == __NR_accept || current->current_syscall == __NR_accept4 || current->current_syscall == __NR_poll)){
-		
+    if(ft_is_replicated(current) && (current->current_syscall == 319 || current->current_syscall == 320 || current->current_syscall == __NR_accept || current->current_syscall == __NR_accept4 || current->current_syscall == __NR_poll)){
+        
                 ft_end_time(&current->time_stat);
-		if(current->current_syscall == 319)
-			ft_update_time(&current->time_stat, TOT_TIME_319);
-		if(current->current_syscall == 320)
-			ft_update_time(&current->time_stat, TOT_TIME_320);
-		if(current->current_syscall == __NR_accept)
-			ft_update_time(&current->time_stat, TOT_TIME_ACCEPT);
-		if(current->current_syscall == __NR_poll)
-			ft_update_time(&current->time_stat, TOT_TIME_POLL);
+        if(current->current_syscall == 319)
+            ft_update_time(&current->time_stat, TOT_TIME_319);
+        if(current->current_syscall == 320)
+            ft_update_time(&current->time_stat, TOT_TIME_320);
+        if(current->current_syscall == __NR_accept)
+            ft_update_time(&current->time_stat, TOT_TIME_ACCEPT);
+        if(current->current_syscall == __NR_poll)
+            ft_update_time(&current->time_stat, TOT_TIME_POLL);
         }
 
 	current->current_syscall = -1;
@@ -1343,7 +1344,7 @@ static int __init ft_syscall_common_management_init(void) {
 	ft_syscall_info_wq= create_singlethread_workqueue("ft_syscall_info_wq");
 	pcn_kmsg_register_callback(PCN_KMSG_TYPE_FT_SYSCALL_INFO, handle_syscall_info_msg);
 	pcn_kmsg_register_callback(PCN_KMSG_TYPE_FT_TICKBUMP_INFO, handle_bump_info_msg);
-        syscall_hash= create_hashtable(1009);
+        syscall_hash= create_hashtable(9973);
         tickbump_hash = create_hashtable(1009);
         return 0;
 }
