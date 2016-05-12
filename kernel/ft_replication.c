@@ -111,7 +111,7 @@ struct collect_secondary_replica_answers collect_secondary_replica_answers_head;
 DEFINE_SPINLOCK(collect_secondary_replica_answers_lock);
 
 static struct workqueue_struct *secondary_replica_generator_wq;
-extern int _cpu;
+extern int my_cpu;
 static int home_kernel;
 
 static void release_collect_secondary_replica_answers(struct kref *kref){
@@ -1230,6 +1230,10 @@ static void create_thread_secondary_replica(struct work_struct* work){
 	my_work= (struct ft_work*) work;
 	msg= (struct secondary_replica_request*) my_work->data;	
 	
+	if(msg->primary_replica.kernel != msg->header.from_cpu){
+		printk("WARNING primary kernel is %d but received msg from %d\n", msg->primary_replica.kernel, msg->header.from_cpu);
+	}
+
 	FTPRINTK("%s: received new replica request from pid %d in kernel %d\n", __func__, msg->primary_replica.pid, msg->primary_replica.kernel);
 
 	ret= kernel_thread( exec_to_secondary_replica, my_work->data,
@@ -1251,7 +1255,7 @@ static int handle_secondary_replica_request(struct pcn_kmsg_message* inc_msg) {
 		pcn_kmsg_free_msg(inc_msg);
         	return -ENOMEM;
 	}
-
+	
         INIT_WORK( (struct work_struct*)work, create_thread_secondary_replica);
         work->data= inc_msg;
         queue_work(secondary_replica_generator_wq, (struct work_struct*)work);
@@ -1544,6 +1548,7 @@ again:
     	list_for_each(iter, &rlist_head) {
         	objPtr = list_entry(iter, _remote_cpu_info_list_t, cpu_list_member);
         	i = objPtr->_data._processor;
+
 #endif
 		if(sent_to[i] == 0){
 			// Send the request to cpu i.
@@ -1845,9 +1850,12 @@ int maybe_create_replicas(void){
 static int __init ft_replication_init(void) {
 
 #ifndef SUPPORT_FOR_CLUSTERING
-	home_kernel= _cpu;
+	home_kernel= cpumask_first(cpu_present_mask);
+	printk("%s home_kernel is %d\n", __func__, home_kernel);
 #else
-    	home_kernel= cpumask_first(cpu_present_mask);
+	home_kernel= my_cpu;
+        printk("%s home_kernel is %d\n", __func__, home_kernel);
+
 #endif
 	secondary_replica_generator_wq= create_singlethread_workqueue("secondary_replica_generator_wq");
 

@@ -48,6 +48,7 @@ unsigned long long bucket_phys_addr = 0;
 EXPORT_SYMBOL(Kernel_Id);
 EXPORT_SYMBOL(bucket_phys_addr);
 
+extern int my_cpu;
 static int _cpu=0;
 
 static int __init popcorn_kernel_init(char *arg)
@@ -113,7 +114,8 @@ typedef struct _remote_cpu_info_list _remote_cpu_info_list_t;
 void popcorn_init(void)
 {
 	
-	Kernel_Id=smp_processor_id();;
+	//Kernel_Id=smp_processor_id();;
+	Kernel_Id= my_cpu;
 	printk("POP_INIT:Kernel id is %d\n",Kernel_Id);
 
 }
@@ -217,6 +219,7 @@ static int handle_remote_proc_cpu_info_response(struct pcn_kmsg_message* inc_msg
   return 0;
 }
 
+
 static int handle_remote_proc_cpu_info_request(struct pcn_kmsg_message* inc_msg)
 {
   int i;
@@ -237,9 +240,9 @@ static int handle_remote_proc_cpu_info_request(struct pcn_kmsg_message* inc_msg)
   response.header.prio = PCN_KMSG_PRIO_NORMAL;
 //  response._data._cpumask = kmalloc( sizeof(struct cpumask), GFP_KERNEL); //this is an error, how you can pass a pointer to another kernel?!
   memcpy(&(response._data._cpumask), cpu_present_mask, sizeof(cpu_present_mask));
-extern int my_cpu;
   response._data._processor = my_cpu;
-
+   printk("%s: sending processor %d\n",__func__, response._data._processor);
+   printk("%s: adding processor %d\n",__func__, msg->_data._processor);
 /*  cpumask_or(&cpu_global_online_mask,&cpu_global_online_mask,(const struct cpumask *)(msg->_data._cpumask));
 */  add_node(&msg->_data,&rlist_head);
 
@@ -272,9 +275,8 @@ int send_cpu_info_request(int KernelId)
 	request->header.prio = PCN_KMSG_PRIO_NORMAL;
 //	request->_data._cpumask = kmalloc( sizeof(struct cpumask), GFP_KERNEL);
 	memcpy(&(request->_data._cpumask), cpu_present_mask, sizeof(cpu_present_mask));
-	extern int my_cpu;
 	request->_data._processor = my_cpu;
-
+	printk("%s: sending processor %d\n",__func__, request->_data._processor);
 	// Send response
 	res = pcn_kmsg_send_long(KernelId, (struct pcn_kmsg_message*) (request),
 			sizeof(_remote_cpu_info_request_t) - sizeof(struct pcn_kmsg_hdr));
@@ -318,6 +320,8 @@ int _init_RemoteCPUMask(void)
 // TODO      
 //      cpumask_or(cpu_global_online_mask,cpu_global_online_mask,(const struct cpumask *)(cpu_result->_data._cpumask));
 
+      printk("%s: adding processor %d\n",__func__, cpu_result->_data._processor);
+
       add_node(&cpu_result->_data,&rlist_head);
       display(&rlist_head);
     }
@@ -335,7 +339,7 @@ int _init_RemoteCPUMask(void)
 
 static int __init cpu_info_handler_init(void)
 {
-    _cpu = smp_processor_id();
+    _cpu = my_cpu;
 
     INIT_LIST_HEAD(&rlist_head);
 

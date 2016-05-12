@@ -562,7 +562,7 @@ static int __init pcn_kmsg_init(void)
 	printk("%s: THIS VERSION DOES NOT SUPPORT CACHE ALIGNED BUFFERS\n",
 	       __func__);
 	printk("%s: Entered pcn_kmsg_init raw: %d id: %d\n",
-		__func__, my_cpu, smp_processor_id());
+		__func__, my_cpu, my_cpu);
 
 	/* Initialize list heads */
 	INIT_LIST_HEAD(&msglist_hiprio);
@@ -996,6 +996,9 @@ int __pcn_kmsg_send_long(unsigned int dest_cpu,
 		if (timeout) {
 			*timeout -= _time;
 			if (*timeout < 0 && (i < (num_chunks-1))) { // TODO inform the other end that the message is truncated
+				//notify the other kernel to erase this partial message
+                                this_chunk.hdr.type= PCN_KMSG_DELETE_LONG_MSG;
+                                __pcn_kmsg_send_timed(dest_cpu, &this_chunk, 0, 0);
 				return -ETIMEDOUT;
 			}
 		}
@@ -1143,6 +1146,26 @@ static int process_large_message(struct pcn_kmsg_reverse_message *msg)
 		    msg->hdr.type, msg->hdr.from_cpu,
 		    msg->hdr.lg_start, msg->hdr.lg_end,
 		    msg->hdr.lg_seqnum);
+
+	 //msg timeout, erase whatever was saved of it (NOTE at least on msg must exist)
+        if(msg->hdr.type == PCN_KMSG_DELETE_LONG_MSG){
+                //It should not be needed safe
+                list_for_each_entry_safe(container_long, n, &lg_buf[msg->hdr.from_cpu], list) {
+                        if ( (container_long != NULL) &&
+                          (container_long->msg.hdr.long_number == msg->hdr.long_number) ){
+                                list_del(&container_long->list);
+                                work_done = 1;
+                                goto out;
+
+                        }
+
+                }
+
+                KMSG_ERR("Failed to find long message %lu in the list of cpu %i!\n",
+                         msg->hdr.long_number, msg->hdr.from_cpu);
+                goto out;
+
+        }
 
 	if (msg->hdr.lg_start) {
 		KMSG_PRINTK("Processing initial message fragment...\n");

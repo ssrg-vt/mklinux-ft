@@ -58,6 +58,7 @@ typedef struct {
 /* Enum for message types.  Modules should add types after
    PCN_KMSG_END. */
 enum pcn_kmsg_type {
+	PCN_KMSG_DELETE_LONG_MSG,
 	PCN_KMSG_TYPE_TEST,
 	PCN_KMSG_TYPE_TEST_LONG,
 	PCN_KMSG_TYPE_CHECKIN,
