@@ -2620,6 +2620,10 @@ static int proc_base_fill_cache(struct file *filp, void *dirent,
 }
 
 #ifdef FT_POPCORN
+extern atomic64_t global_msg_cnt;
+extern atomic64_t global_sysmsg_cnt;
+extern atomic64_t global_tickmsg_cnt;
+extern atomic64_t global_syncmsg_cnt;
 static int proc_pid_det_state(struct seq_file *m, struct pid_namespace *pidns,
 			  struct pid *pid, struct task_struct *task)
 {
@@ -2634,6 +2638,10 @@ static int proc_pid_det_state(struct seq_file *m, struct pid_namespace *pidns,
 	spin_lock(&ns->task_list_lock);
 	seq_printf(m, "waiting: %d\n", ns->wait_count);
 	seq_printf(m, "shepherd_bump: %d\n", ns->shepherd_bump);
+	seq_printf(m, "total msg: %lld\n", atomic64_read(&global_msg_cnt));
+	seq_printf(m, "tick msg: %lld\n", atomic64_read(&global_tickmsg_cnt));
+	seq_printf(m, "syscall msg: %lld\n", atomic64_read(&global_sysmsg_cnt));
+	seq_printf(m, "rep msg: %lld\n", atomic64_read(&global_syncmsg_cnt));
 #ifdef LOCK_REPLICATION
 	seq_printf(m, "global_rep_id: %llu\n", ns->global_rep_id);
 #endif

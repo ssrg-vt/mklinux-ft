@@ -474,11 +474,13 @@ static int create_syscall_msg(struct ft_pop_rep_id* primary_ft_pop_id, int prima
         return 0;
 }
 
+extern atomic64_t global_sysmsg_cnt;
 static void send_syscall_info_to_secondary_replicas(struct ft_pop_rep *replica_group, struct ft_pop_rep_id* primary_ft_pop_id, int primary_level, int* primary_id_array, int syscall_id, char* syscall_info, unsigned int syscall_info_size, char* extra_key, unsigned int extra_key_size){
         struct syscall_msg* msg;
         int msg_size;
         int ret;
 
+        atomic64_inc(&global_sysmsg_cnt);
         ret= create_syscall_msg(primary_ft_pop_id, primary_level, primary_id_array, syscall_id, syscall_info, syscall_info_size, extra_key, extra_key_size, &msg, &msg_size);
         if(ret)
                 return;
@@ -1180,10 +1182,12 @@ void wait_bump(struct task_struct *task)
     ft_update_time(&time, FT_TIME_WAIT_BUMP);
 }
 
+extern atomic64_t global_tickmsg_cnt;
 int send_bump(struct task_struct *task, int id_syscall, uint64_t prev_tick, uint64_t new_tick)
 {
     struct tick_bump_msg *msg;
 
+    atomic64_inc(&global_tickmsg_cnt);
 #ifdef LOCK_REPLICATION
 	return 0;
 #endif

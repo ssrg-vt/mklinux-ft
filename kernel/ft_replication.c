@@ -10,6 +10,7 @@
 #include <linux/pcn_kmsg.h>
 #include <linux/slab.h>
 #include <linux/list.h>
+#include <asm/atomic64_64.h>
 #include <linux/dcache.h>
 #include <linux/fs.h>
 #include <asm/uaccess.h>
@@ -539,6 +540,10 @@ static int create_primary_replica_answer_msg(struct replica_id* primary_replica_
 
 }
 
+atomic64_t global_msg_cnt;
+atomic64_t global_sysmsg_cnt;
+atomic64_t global_tickmsg_cnt;
+atomic64_t global_syncmsg_cnt;
 /* send msg to all secondary replica listed in ft_popcorn.
  *
  */
@@ -547,6 +552,7 @@ void send_to_all_secondary_replicas(struct ft_pop_rep* ft_popcorn, struct pcn_km
         struct replica_id secondary_replica;
         struct replica_id_list* objPtr;
 
+	atomic64_inc(&global_msg_cnt);
 	list_for_each(iter, &ft_popcorn->secondary_replicas_head.replica_list_member) {
                 objPtr = list_entry(iter, struct replica_id_list, replica_list_member);
                 secondary_replica= objPtr->replica;

@@ -10,6 +10,7 @@
 
 #include <linux/nsproxy.h>
 #include <linux/spinlock.h>
+#include <asm/atomic64_64.h>
 #include <linux/kref.h>
 #include <linux/list.h>
 #include <linux/slab.h>
@@ -27,6 +28,11 @@
 #define LOCK_REPLICATION
 
 //#define DET_PROF 1
+//
+extern atomic64_t global_msg_cnt;
+extern atomic64_t global_sysmsg_cnt;
+extern atomic64_t global_tickmsg_cnt;
+extern atomic64_t global_syncmsg_cnt;
 
 struct popcorn_namespace *get_popcorn_ns(struct popcorn_namespace *ns);
 struct popcorn_namespace *copy_pop_ns(unsigned long flags, struct popcorn_namespace *ns);
@@ -107,7 +113,10 @@ struct popcorn_namespace
 	atomic_t global_rep_id;
 	atomic_t queue_len;
 	spinlock_t rep_queue_lock;
+	spinlock_t rep_queue_lock_tail;
 	struct rep_sync_list ns_rep_list;
+	// For stats
+	atomic64_t rep_msg_cnt;
 #endif
 #ifdef DET_PROF
 	uint64_t start_cost[64];
@@ -115,6 +124,9 @@ struct popcorn_namespace
 	uint64_t end_cost[64];
 	spinlock_t tick_cost_lock;
 #endif
+	// For stats
+	atomic64_t net_msg_cnt;
+	atomic64_t total_msg_cnt;
 };
 
 extern struct popcorn_namespace init_pop_ns;
@@ -149,8 +161,13 @@ static inline void init_rep_list(struct popcorn_namespace *ns)
 	mutex_init(&ns->gmtx);
 	INIT_LIST_HEAD(&ns->ns_rep_list.rep_sync_member);
 	spin_lock_init(&ns->rep_queue_lock);
+	spin_lock_init(&ns->rep_queue_lock_tail);
 	atomic_set(&ns->global_rep_id, 0);
 	atomic_set(&ns->queue_len, 0);
+	atomic_set(&global_msg_cnt, 0);
+	atomic_set(&global_sysmsg_cnt, 0);
+	atomic_set(&global_tickmsg_cnt, 0);
+	atomic_set(&global_syncmsg_cnt, 0);
 }
 
 static inline int enqueue_rep_list(struct popcorn_namespace *ns, uint64_t rep_id, uint64_t global_rep_id, struct ft_pid *ft_pid)
@@ -165,7 +182,7 @@ static inline int enqueue_rep_list(struct popcorn_namespace *ns, uint64_t rep_id
 	new_sync->global_rep_id = global_rep_id;
 	memcpy(&new_sync->ft_pid, ft_pid, sizeof(struct ft_pid));
 	spin_lock_irqsave(&ns->rep_queue_lock, flags);
-	atomic_dec(&ns->queue_len);
+	atomic_inc(&ns->queue_len);
 	list_add_tail(&new_sync->rep_sync_member, &ns->ns_rep_list.rep_sync_member);
 	spin_unlock_irqrestore(&ns->rep_queue_lock, flags);
 
@@ -199,19 +216,22 @@ static inline int dequeue_rep_list(struct popcorn_namespace *ns)
 {
 	unsigned long flags;
 	struct rep_sync_list *sync;
+	int lock_tail = 0;
+	int ret;
 
 	spin_lock_irqsave(&ns->rep_queue_lock, flags);
 	atomic_dec(&ns->queue_len);
 	if (list_empty(&ns->ns_rep_list.rep_sync_member)) {
-		spin_unlock_irqrestore(&ns->rep_queue_lock, flags);
-		return 0;
+		ret = 0;
+		goto dequeue_out;
 	}
 	sync = list_first_entry(&ns->ns_rep_list.rep_sync_member, struct rep_sync_list, rep_sync_member);
 	list_del(&sync->rep_sync_member);
 	kfree(sync);
+	ret = 1;
+dequeue_out:
 	spin_unlock_irqrestore(&ns->rep_queue_lock, flags);
-
-	return 1;
+	return ret;
 }
 
 static inline void init_task_list(struct popcorn_namespace *ns)

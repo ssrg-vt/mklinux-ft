@@ -861,6 +861,7 @@ int send_rep_turn(struct popcorn_namespace *ns, struct task_struct *task)
 	memcpy(&msg->ft_pid, &task->ft_pid, sizeof(struct ft_pid));
 	msg->rep_id = task->rep_id;
 	msg->global_rep_id = atomic_read(&ns->global_rep_id);
+	atomic64_inc(&global_syncmsg_cnt);
 	mb();
 	trace_printk("Sending sync for rep_id %llu, gid %d for %d\n", msg->rep_id, msg->global_rep_id,
 		choose_key_for_ftpid(&task->ft_pid, FTPID_HASH_SIZE));
