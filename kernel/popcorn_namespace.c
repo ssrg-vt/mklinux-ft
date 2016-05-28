@@ -643,13 +643,19 @@ long __rep_start(struct task_struct *task)
 			} else {
 				// Keep waiting
 				mutex_unlock(&ns->gmtx);
-				wait_cnt ++;
-				if (wait_cnt < 200) {
-					udelay(5);
-				} else {
-					schedule_timeout(1);
-				}
+				set_task_state(task, TASK_INTERRUPTIBLE);
+				schedule_timeout(1);
+				set_task_state(task, TASK_RUNNING);
 				mutex_lock(&ns->gmtx);
+				/*
+				 *wait_cnt ++;
+				 *if (wait_cnt < 200) {
+				 *    udelay(5);
+				 *} else {
+				 *    schedule_timeout(1);
+				 *}
+				 *mutex_lock(&ns->gmtx);
+				 */
 			}
 		}
 	}
@@ -660,6 +666,10 @@ long __rep_start(struct task_struct *task)
 long __rep_end(struct task_struct *task)
 {
 	struct popcorn_namespace *ns;
+	unsigned long flags;
+	struct list_head *iter= NULL;
+	struct task_list *objPtr;
+	struct rep_sync_list *sync;
 	if(!is_popcorn(task)) {
 		return 0;
 	}
@@ -677,6 +687,19 @@ long __rep_end(struct task_struct *task)
 	task->rep_id++;
 	task->ft_det_state = FT_DET_INACTIVE;
 	mutex_unlock(&ns->gmtx);
+
+	if (ft_is_secondary_replica(task)) {
+		spin_lock_irqsave(&ns->rep_queue_lock, flags);
+		sync = list_first_entry(&ns->ns_rep_list.rep_sync_member, struct rep_sync_list, rep_sync_member);
+		spin_unlock_irqrestore(&ns->rep_queue_lock, flags);
+		list_for_each(iter, &ns->ns_task_list.task_list_member) {
+			objPtr = list_entry(iter, struct task_list, task_list_member);
+			if (are_ft_pid_equals(&sync->ft_pid, &objPtr->task->ft_pid)) {
+				wake_up_process(objPtr->task);
+				return 0;
+			}
+		}
+	}
 }
 
 // Whenever a new thread is created, the task should go to ns

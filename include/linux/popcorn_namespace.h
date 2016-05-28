@@ -174,6 +174,9 @@ static inline int enqueue_rep_list(struct popcorn_namespace *ns, uint64_t rep_id
 {
 	unsigned long flags;
 	struct rep_sync_list *new_sync;
+	struct list_head *iter= NULL;
+	struct task_list *objPtr;
+
 	new_sync = kmalloc(sizeof(struct rep_sync_list), GFP_KERNEL);
 	if (new_sync == NULL)
 		return -1;
@@ -185,6 +188,18 @@ static inline int enqueue_rep_list(struct popcorn_namespace *ns, uint64_t rep_id
 	atomic_inc(&ns->queue_len);
 	list_add_tail(&new_sync->rep_sync_member, &ns->ns_rep_list.rep_sync_member);
 	spin_unlock_irqrestore(&ns->rep_queue_lock, flags);
+
+	if (atomic_read(&ns->queue_len) <= 1) {
+		spin_lock_irqsave(&ns->rep_queue_lock, flags);
+		spin_unlock_irqrestore(&ns->rep_queue_lock, flags);
+		list_for_each(iter, &ns->ns_task_list.task_list_member) {
+			objPtr = list_entry(iter, struct task_list, task_list_member);
+			if (are_ft_pid_equals(&new_sync->ft_pid, &objPtr->task->ft_pid)) {
+				wake_up_process(objPtr->task);
+				return 0;
+			}
+		}
+	}
 
 	return 1;
 }

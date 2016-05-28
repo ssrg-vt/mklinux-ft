@@ -2643,6 +2643,7 @@ static int proc_pid_det_state(struct seq_file *m, struct pid_namespace *pidns,
 	seq_printf(m, "syscall msg: %lld\n", atomic64_read(&global_sysmsg_cnt));
 	seq_printf(m, "rep msg: %lld\n", atomic64_read(&global_syncmsg_cnt));
 #ifdef LOCK_REPLICATION
+	seq_printf(m, "pending msg: %lld\n", atomic_read(&ns->queue_len));
 	seq_printf(m, "global_rep_id: %llu\n", ns->global_rep_id);
 #endif
 	list_for_each(iter, &ns->ns_task_list.task_list_member) {
